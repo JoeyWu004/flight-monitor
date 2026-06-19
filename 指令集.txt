@@ -1,0 +1,8 @@
+---- 立即运行（无需重启） ----
+   schtasks /run /tn "FlightMonitor"
+
+---- 停止运行 ----
+   schtasks /end /tn "FlightMonitor"
+
+---- 查看状态 ----
+   schtasks /query /tn "FlightMonitor"

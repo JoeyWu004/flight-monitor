@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# 数据库
+*.db
+
+# 日志
+*.log
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# 虚拟环境
+venv/
+.venv/
+
+# 调试 HTML
+debug_*.html
+
+# 敏感信息
+webhook.txt
+
+# 系统文件
+.DS_Store
+Thumbs.db
+desktop.ini

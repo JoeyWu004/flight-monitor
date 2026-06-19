@@ -57,7 +57,18 @@ FEISHU_WEBHOOK = "https://open.feishu.cn/open-apis/bot/v2/hook/xxxxx"
 
 > ⚠️ 留空则不会推送飞书消息，仅输出到控制台。
 
-**③ 按需调整其他参数**
+**③ 填写 DeepSeek API Key（可选）**
+
+告警触发时自动调用 DeepSeek 分析价格趋势，结果附带在飞书消息中。不配则跳过 AI 分析：
+
+```python
+DEEPSEEK_API_KEY = "sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+DEEPSEEK_MODEL = "deepseek-chat"    # 可选 deepseek-chat / deepseek-reasoner
+```
+
+> 💡 获取 Key：访问 [DeepSeek 开放平台](https://platform.deepseek.com/)，注册后创建 API Key。
+
+**④ 按需调整其他参数**
 
 | 配置 | 说明 | 默认值 |
 |------|------|--------|
@@ -104,6 +115,9 @@ python main.py --once --debug  # 调试模式，保存页面HTML
 | `PRICE_CHANGE_THRESHOLD_MIN` | 价格变动告警最小值（元） | 10 |
 | `ALERT_ROUTES` | 仅这些航线推送告警（空=全部） | `[]` |
 | `ALERT_DATES` | 仅这些日期推送告警（空=全部） | `[]` |
+| `FEISHU_WEBHOOK` | 飞书机器人 Webhook 地址 | - |
+| `DEEPSEEK_API_KEY` | DeepSeek API Key（不配则告警不附带AI分析） | - |
+| `DEEPSEEK_MODEL` | DeepSeek 模型名称 | `deepseek-chat` |
 | `DB_RETENTION_DAYS` | 数据库保留天数（0=永久） | 0 |
 
 ### 告警过滤

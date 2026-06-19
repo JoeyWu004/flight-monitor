@@ -5,7 +5,14 @@ Flight-Monitor - 数据库模块
 
 import sqlite3
 import config
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+
+
+def now_beijing():
+    """返回当前北京时间字符串 (UTC+8)"""
+    return datetime.now(timezone.utc).astimezone(
+        timezone(timedelta(hours=8))
+    ).strftime('%Y-%m-%d %H:%M:%S')
 
 
 def get_connection():
@@ -101,8 +108,8 @@ def insert_price(record):
             (route_from, route_to, route_from_name, route_to_name,
              flight_date, flight_no, airline,
              departure_airport, arrival_airport,
-             departure_time, arrival_time, price)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             departure_time, arrival_time, price, crawl_time)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
         record['route_from'],
         record['route_to'],
@@ -116,6 +123,7 @@ def insert_price(record):
         record.get('departure_time', ''),
         record.get('arrival_time', ''),
         record['price'],
+        now_beijing(),
     ))
     conn.commit()
     conn.close()
@@ -152,10 +160,10 @@ def insert_alert(flight_no, route_from, route_to, flight_date,
     cursor.execute("""
         INSERT INTO price_alerts
             (flight_no, route_from, route_to, flight_date,
-             old_price, new_price, change_amount, change_percent)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+             old_price, new_price, change_amount, change_percent, alert_time)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (flight_no, route_from, route_to, flight_date,
-          old_price, new_price, change_amount, change_percent))
+          old_price, new_price, change_amount, change_percent, now_beijing()))
     conn.commit()
     conn.close()
 
@@ -172,9 +180,9 @@ def insert_monitor_log(routes_checked, flights_found, alerts_generated,
     cursor = conn.cursor()
     cursor.execute("""
         INSERT INTO monitor_log
-            (routes_checked, flights_found, alerts_generated, status, error_msg)
-        VALUES (?, ?, ?, ?, ?)
-    """, (routes_checked, flights_found, alerts_generated, status, error_msg))
+            (routes_checked, flights_found, alerts_generated, status, error_msg, run_time)
+        VALUES (?, ?, ?, ?, ?, ?)
+    """, (routes_checked, flights_found, alerts_generated, status, error_msg, now_beijing()))
     conn.commit()
     conn.close()
 

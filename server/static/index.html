@@ -638,14 +638,19 @@ function renderMultiChart(trends) {
   flightList.forEach(f => f.trend.forEach(p => allTimes.add(p.time.slice(0, 16))));
   const timeArray = [...allTimes].sort();
 
+  // 全局存储序列数据，供 tooltip formatter 查询同时间点其他航班
+  window.__chartSeriesMeta = [];
+
   const series = flightList.map((f) => {
     const priceMap = {};
     f.trend.forEach(p => { priceMap[p.time.slice(0, 16)] = p.price; });
     const data = timeArray.map(t => priceMap[t] ?? null);
     const color = getAirlineColor(f.airline);
+    const name = `${f.airline} ${f.flight_no}`;
 
+    window.__chartSeriesMeta.push({ name, data, color });
     return {
-      name: `${f.airline} ${f.flight_no}`,
+      name,
       type: "line",
       show: true,
       data: data,
@@ -671,10 +676,54 @@ function renderMultiChart(trends) {
       top: 5,
     },
     tooltip: {
-      trigger: "axis",
+      trigger: "item",
       backgroundColor: "#161b22",
       borderColor: "#30363d",
       textStyle: { color: "#c9d1d9", fontSize: 12 },
+      formatter: function (param) {
+        if (!param || param.value == null) return "";
+        const time = param.name;
+        const dataIndex = param.dataIndex;
+        const rows = [];
+        const meta = window.__chartSeriesMeta || [];
+        for (let i = 0; i < meta.length; i++) {
+          const s = meta[i];
+          if (s.data[dataIndex] != null) {
+            rows.push({
+              name: s.name,
+              price: s.data[dataIndex],
+              color: s.color,
+              isHovered: s.name === param.seriesName,
+            });
+          }
+        }
+        rows.sort((a, b) => a.price - b.price);
+        let html =
+          '<div style="font-weight:bold;margin-bottom:6px;color:#e6edf3">' +
+          time +
+          "</div>";
+        for (const r of rows) {
+          const opacity = r.isHovered ? 1 : 0.4;
+          const weight = r.isHovered ? "bold" : "normal";
+          html +=
+            '<div style="display:flex;align-items:center;gap:6px;margin:3px 0;opacity:' +
+            opacity +
+            '">' +
+            '<span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:' +
+            r.color +
+            '"></span>' +
+            '<span>' +
+            r.name +
+            "</span>" +
+            '<span style="margin-left:auto;font-weight:' +
+            weight +
+            '">¥' +
+            r.price +
+            "</span>" +
+            "</div>";
+        }
+        return html;
+      },
     },
     legend: {
       show: false,
@@ -703,6 +752,7 @@ function renderMultiChart(trends) {
   chartSeriesNames = series.map(s => s.name);
   chartInstance.setOption(option, true);
   window.addEventListener("resize", () => chartInstance?.resize());
+
 }
 
 // 自定义图例的点击切换

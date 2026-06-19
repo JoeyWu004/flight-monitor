@@ -1,0 +1,12 @@
+  1. SSH 登录：ssh root@<服务器IP>
+  2. 执行：
+  python3.8 -c "import hashlib; print(hashlib.sha256(input('密码: ').encode()).hexdigest())"
+  3. 屏幕显示 密码:  → 直接输入你要设的密码 → 回车
+  4. 会输出一串哈希
+  5. 把这个哈希复制下来，编辑 users.json 替换掉旧的。
+	{
+		"admin": "这里是admin的密码哈希",
+   		"zhangsan": "这里是zhangsan的密码哈希"
+ 	 }
+  6.  	scp "D:\Flight-Monitor\server\users.json" root@<服务器IP>:/opt/flight-monitor-server/
+  	ssh root@<服务器IP> "systemctl restart flight-monitor-server"

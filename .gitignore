@@ -35,3 +35,7 @@ desktop.ini
 
 # 启动脚本（本地用，不上传）
 run_monitor.bat
+
+# 看板 - 含敏感信息不提交
+server/users.json
+server/sync_db.bat

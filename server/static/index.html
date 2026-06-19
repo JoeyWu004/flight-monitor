@@ -1,0 +1,734 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Flight-Monitor 数据看板</title>
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  background: #0d1117;
+  color: #c9d1d9;
+  min-height: 100vh;
+}
+
+/* ========== 登录页 ========== */
+.login-container {
+  display: flex; justify-content: center; align-items: center;
+  min-height: 100vh; padding: 20px;
+}
+.login-card {
+  background: #161b22; border: 1px solid #30363d;
+  border-radius: 12px; padding: 40px 32px;
+  width: 100%; max-width: 380px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+}
+.login-card h1 { font-size: 22px; text-align: center; margin-bottom: 8px; color: #f0f6fc; }
+.login-card .subtitle { text-align: center; color: #8b949e; font-size: 13px; margin-bottom: 28px; }
+.login-card label { display: block; font-size: 13px; color: #8b949e; margin-bottom: 6px; }
+.login-card input {
+  width: 100%; padding: 10px 14px; background: #0d1117;
+  border: 1px solid #30363d; border-radius: 8px;
+  color: #f0f6fc; font-size: 15px; margin-bottom: 18px;
+  outline: none; transition: border-color .2s;
+}
+.login-card input:focus { border-color: #58a6ff; }
+.login-card .btn {
+  width: 100%; padding: 11px; background: #238636; color: #fff;
+  border: none; border-radius: 8px; font-size: 15px; cursor: pointer;
+  font-weight: 600; transition: background .2s;
+}
+.login-card .btn:hover { background: #2ea043; }
+.login-card .error {
+  color: #f85149; font-size: 13px; text-align: center;
+  margin-bottom: 14px; min-height: 20px;
+}
+
+/* ========== 主面板 ========== */
+.app { display: flex; flex-direction: column; min-height: 100vh; }
+.header {
+  background: #161b22; border-bottom: 1px solid #30363d;
+  padding: 14px 20px; display: flex; justify-content: space-between;
+  align-items: center; position: sticky; top: 0; z-index: 10;
+}
+.header h1 { font-size: 18px; color: #f0f6fc; white-space: nowrap; }
+.header .user-info { display: flex; align-items: center; gap: 14px; }
+.header .user-info span { color: #8b949e; font-size: 13px; }
+.header .logout-btn {
+  background: #21262d; color: #c9d1d9; border: 1px solid #30363d;
+  padding: 6px 14px; border-radius: 6px; cursor: pointer; font-size: 13px;
+}
+.header .logout-btn:hover { background: #30363d; }
+
+.main { flex: 1; padding: 16px; max-width: 1200px; margin: 0 auto; width: 100%; }
+
+/* 筛选栏 */
+.filters {
+  background: #161b22; border: 1px solid #30363d;
+  border-radius: 10px; padding: 16px 20px; margin-bottom: 16px;
+  display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end;
+}
+.filter-group { display: flex; flex-direction: column; min-width: 120px; flex: 1; }
+.filter-group label { font-size: 12px; color: #8b949e; margin-bottom: 4px; }
+.filter-group select, .filter-group input {
+  background: #0d1117; border: 1px solid #30363d;
+  border-radius: 6px; color: #f0f6fc; padding: 8px 10px;
+  font-size: 14px; outline: none;
+}
+.filter-group select:focus { border-color: #58a6ff; }
+
+/* 图表区 */
+.chart-section {
+  background: #161b22; border: 1px solid #30363d;
+  border-radius: 10px; padding: 16px 20px; margin-bottom: 16px;
+}
+.chart-section h2 { font-size: 15px; color: #f0f6fc; margin-bottom: 12px; }
+#trend-chart { width: 100%; height: 440px; }
+
+/* 表格区 */
+.table-section {
+  background: #161b22; border: 1px solid #30363d;
+  border-radius: 10px; padding: 16px 20px; margin-bottom: 16px;
+  overflow-x: auto;
+}
+.table-section h2 { font-size: 15px; color: #f0f6fc; margin-bottom: 12px; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 600px; }
+th {
+  text-align: left; padding: 10px 8px; color: #8b949e;
+  border-bottom: 1px solid #21262d; font-weight: 500; font-size: 12px;
+  white-space: nowrap;
+}
+td { padding: 10px 8px; border-bottom: 1px solid #21262d22; white-space: nowrap; }
+tr:hover td { background: #1c2128; }
+.price { font-weight: 600; color: #f0f6fc; }
+.price-down { color: #3fb950; }
+.price-up { color: #f85149; }
+.price-flat { color: #8b949e; }
+.tag-new { color: #58a6ff; font-size: 12px; }
+
+/* 加载 & 空状态 */
+.loading, .empty {
+  text-align: center; color: #8b949e; padding: 40px; font-size: 14px;
+}
+.spinner {
+  display: inline-block; width: 20px; height: 20px; border: 2px solid #30363d;
+  border-top-color: #58a6ff; border-radius: 50%; animation: spin .6s linear infinite;
+  margin-right: 8px; vertical-align: middle;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* checkbox 组 */
+#dest-checkboxes label { user-select: none; }
+#dest-checkboxes input[type=checkbox] { accent-color: #58a6ff; cursor: pointer; }
+
+/* 图表 + 自定义图例布局（图例在上，图表在下） */
+.chart-layout { display: flex; flex-direction: column; gap: 8px; }
+#trend-chart { width: 100%; }
+#custom-legend { padding: 4px 0; }
+#custom-legend .legend-group {
+  display: flex; align-items: flex-start; gap: 8px;
+  margin-bottom: 4px; flex-wrap: wrap;
+}
+#custom-legend .legend-group-title {
+  font-size: 12px; font-weight: 600; color: #f0f6fc;
+  padding: 2px 8px; border-radius: 4px; white-space: nowrap;
+  flex-shrink: 0; min-width: 60px; line-height: 22px;
+}
+#custom-legend .legend-item {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 2px 8px; border-radius: 4px; cursor: pointer;
+  font-size: 12px; color: #c9d1d9; transition: background .15s;
+  user-select: none; white-space: nowrap;
+}
+#custom-legend .legend-item:hover { background: #21262d; }
+#custom-legend .legend-item.off { opacity: .4; text-decoration: line-through; }
+#custom-legend .legend-color {
+  width: 14px; height: 3px; border-radius: 2px; flex-shrink: 0;
+}
+#custom-legend .legend-item.off .legend-color { opacity: .3; }
+
+/* 响应式 */
+@media (max-width: 600px) {
+  .header h1 { font-size: 15px; }
+  .header .user-info span { display: none; }
+  .filters { flex-direction: column; padding: 12px; }
+  .filter-group { min-width: 100%; }
+  #trend-chart { height: 300px; }
+  .main { padding: 10px; }
+  .chart-section, .table-section { padding: 12px; }
+}
+</style>
+</head>
+<body>
+
+<!-- ========== 登录页 ========== -->
+<div id="login-page" class="login-container">
+  <div class="login-card">
+    <h1>🛫 Flight-Monitor</h1>
+    <p class="subtitle">航班价格数据看板</p>
+    <div class="error" id="login-error"></div>
+    <label>用户名</label>
+    <input type="text" id="login-user" placeholder="请输入用户名" autocomplete="username">
+    <label>密码</label>
+    <input type="password" id="login-pass" placeholder="请输入密码" autocomplete="current-password">
+    <button class="btn" onclick="doLogin()">登 录</button>
+  </div>
+</div>
+
+<!-- ========== 主面板（默认隐藏） ========== -->
+<div id="app-page" class="app" style="display:none">
+  <div class="header">
+    <h1>🛫 Flight-Monitor 数据看板</h1>
+    <div class="user-info">
+      <span id="username-display"></span>
+      <button class="logout-btn" onclick="doLogout()">退出</button>
+    </div>
+  </div>
+
+  <div class="main">
+    <!-- 筛选栏 -->
+    <div class="filters">
+      <div class="filter-group">
+        <label>出发城市</label>
+        <select id="select-from" onchange="onFromChange()">
+          <option value="">请选择出发城市</option>
+        </select>
+      </div>
+      <div class="filter-group" style="flex:3;min-width:250px">
+        <label>到达城市（可多选） <a href="#" onclick="toggleAllDests();return false" style="color:#58a6ff;font-size:12px;margin-left:6px">全选/取消</a></label>
+        <div id="dest-checkboxes" style="display:flex;flex-wrap:wrap;gap:8px 16px;padding:4px 0">
+          <span style="color:#8b949e;font-size:13px">请先选择出发城市</span>
+        </div>
+      </div>
+      <div class="filter-group">
+        <label>航班日期</label>
+        <select id="select-date" onchange="onDateChange()">
+          <option value="">请先选择航线和日期</option>
+        </select>
+      </div>
+    </div>
+
+    <!-- 趋势图 -->
+    <div class="chart-section">
+      <h2>📈 价格趋势</h2>
+      <div class="chart-layout">
+        <div id="custom-legend"></div>
+        <div id="trend-chart">
+          <div class="empty" id="chart-empty">请选择航线、日期和航班查看价格趋势</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 航班列表 -->
+    <div class="table-section">
+      <h2>✈️ 航班列表 <span id="flight-count" style="color:#8b949e;font-weight:400"></span></h2>
+      <p id="table-tip" style="color:#8b949e;font-size:12px;margin-bottom:10px;display:none">💡 点击任意航班行即可在上方查看该航班的价格走势</p>
+      <div id="flight-table-container">
+        <div class="empty" id="table-empty">请选择航线和日期查看航班</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ============================================================
+//  全局状态
+// ============================================================
+let token = localStorage.getItem("fm_token") || "";
+let username = localStorage.getItem("fm_username") || "";
+let routes = [];
+let currentFlights = [];
+let chartInstance = null;
+
+// ============================================================
+//  API 封装
+// ============================================================
+async function api(path, options = {}) {
+  const headers = { "Content-Type": "application/json" };
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+
+  const resp = await fetch(path, { headers, ...options });
+  const data = await resp.json();
+
+  if (resp.status === 401) {
+    // token 过期，退回登录页
+    doLogout();
+    throw new Error(data.detail || "未登录");
+  }
+  if (!resp.ok) throw new Error(data.detail || "请求失败");
+  return data;
+}
+
+// ============================================================
+//  登录 / 退出
+// ============================================================
+async function doLogin() {
+  const user = document.getElementById("login-user").value.trim();
+  const pass = document.getElementById("login-pass").value;
+  const errEl = document.getElementById("login-error");
+
+  if (!user || !pass) { errEl.textContent = "请输入用户名和密码"; return; }
+
+  try {
+    const resp = await fetch("/api/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username: user, password: pass }),
+    });
+    const data = await resp.json();
+    if (!resp.ok) { errEl.textContent = data.detail || "登录失败"; return; }
+
+    token = data.token;
+    username = data.username;
+    localStorage.setItem("fm_token", token);
+    localStorage.setItem("fm_username", username);
+
+    showApp();
+  } catch (e) {
+    errEl.textContent = "网络错误，请检查服务器连接";
+  }
+}
+
+function doLogout() {
+  token = "";
+  username = "";
+  localStorage.removeItem("fm_token");
+  localStorage.removeItem("fm_username");
+  document.getElementById("login-page").style.display = "flex";
+  document.getElementById("app-page").style.display = "none";
+  document.getElementById("login-error").textContent = "";
+  document.getElementById("login-user").value = "";
+  document.getElementById("login-pass").value = "";
+}
+
+// 回车登录
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && document.getElementById("login-page").style.display !== "none") {
+    doLogin();
+  }
+});
+
+// ============================================================
+//  页面切换
+// ============================================================
+async function showApp() {
+  document.getElementById("login-page").style.display = "none";
+  document.getElementById("app-page").style.display = "flex";
+  document.getElementById("username-display").textContent = `👤 ${username}`;
+
+  // 加载航线列表
+  try {
+    const data = await api("/api/routes");
+    routes = data.routes;
+    buildFromSelect();
+  } catch (e) {
+    console.error("加载航线失败:", e);
+  }
+}
+
+// ============================================================
+//  筛选器逻辑
+// ============================================================
+function buildFromSelect() {
+  const sel = document.getElementById("select-from");
+  sel.innerHTML = '<option value="">请选择出发城市</option>';
+
+  const fromSet = new Set();
+  routes.forEach(r => {
+    if (!fromSet.has(r.from)) {
+      fromSet.add(r.from);
+      const opt = document.createElement("option");
+      opt.value = r.from;
+      opt.textContent = r.from_name;
+      sel.appendChild(opt);
+    }
+  });
+}
+
+function onFromChange() {
+  const from = document.getElementById("select-from").value;
+  const container = document.getElementById("dest-checkboxes");
+  document.getElementById("select-date").innerHTML = '<option value="">请先选择航线和日期</option>';
+  // 重置颜色映射
+  Object.keys(airlineColorMap).forEach(k => delete airlineColorMap[k]);
+  airlineColorIdx = 0;
+  clearFlights();
+
+  if (!from) {
+    container.innerHTML = '<span style="color:#8b949e;font-size:13px">请先选择出发城市</span>';
+    return;
+  }
+
+  // 构建复选框
+  const dests = routes.filter(r => r.from === from);
+  if (!dests.length) {
+    container.innerHTML = '<span style="color:#8b949e;font-size:13px">无可用目的地</span>';
+    return;
+  }
+  container.innerHTML = dests.map(r =>
+    `<label style="display:flex;align-items:center;gap:4px;cursor:pointer;color:#c9d1d9;font-size:13px;white-space:nowrap">
+      <input type="checkbox" value="${r.to}" onchange="onDestChange()">${r.to_name}
+    </label>`
+  ).join('');
+}
+
+function getSelectedDests() {
+  const boxes = document.querySelectorAll("#dest-checkboxes input[type=checkbox]:checked");
+  return Array.from(boxes).map(cb => cb.value);
+}
+
+function toggleAllDests() {
+  const boxes = document.querySelectorAll("#dest-checkboxes input[type=checkbox]");
+  const allChecked = boxes.length && Array.from(boxes).every(cb => cb.checked);
+  boxes.forEach(cb => { cb.checked = !allChecked; });
+  onDestChange();
+}
+
+async function onDestChange() {
+  const from = document.getElementById("select-from").value;
+  const dests = getSelectedDests();
+  const dateSel = document.getElementById("select-date");
+
+  if (!from || !dests.length) {
+    dateSel.innerHTML = '<option value="">请先选择航线和日期</option>';
+    clearFlights();
+    return;
+  }
+
+  // 记录当前已选日期
+  const prevDate = dateSel.value;
+
+  // 获取所有选中目的地的日期交集
+  dateSel.innerHTML = '<option value="">加载中...</option>';
+  try {
+    const allDates = [];
+    for (const d of dests) {
+      const data = await api(`/api/dates?frm=${from}&to=${d}`);
+      allDates.push(new Set(data.dates));
+    }
+    // 取交集
+    const common = [...allDates[0]].filter(d => allDates.every(s => s.has(d)));
+    dateSel.innerHTML = '<option value="">请选择日期</option>';
+    common.forEach(d => {
+      const opt = document.createElement("option");
+      opt.value = d;
+      opt.textContent = d;
+      dateSel.appendChild(opt);
+    });
+
+    // 如果之前选的日期还在交集中，保留并自动刷新
+    if (prevDate && common.includes(prevDate)) {
+      dateSel.value = prevDate;
+      onDateChange();  // 自动刷新数据和图表
+    } else {
+      clearFlights();
+    }
+  } catch (e) {
+    dateSel.innerHTML = '<option value="">加载失败</option>';
+  }
+}
+
+async function onDateChange() {
+  const from = document.getElementById("select-from").value;
+  const dests = getSelectedDests();
+  const date = document.getElementById("select-date").value;
+
+  if (!from || !dests.length || !date) {
+    clearFlights();
+    return;
+  }
+
+  const toParam = dests.join(",");
+  await loadFlights(from, toParam, date);
+}
+
+// ============================================================
+//  数据加载
+// ============================================================
+async function loadFlights(from, toParam, date) {
+  const tableContainer = document.getElementById("flight-table-container");
+  tableContainer.innerHTML = '<div class="loading"><span class="spinner"></span>加载中...</div>';
+  const emptyEl = document.getElementById("chart-empty");
+  if (emptyEl) emptyEl.style.display = "none";
+
+  try {
+    const data = await api(`/api/multi-flights?frm=${from}&to=${toParam}&date=${date}`);
+    currentFlights = data.flights;
+    renderFlightTable();
+    loadAllTrends(from, toParam, date);
+  } catch (e) {
+    tableContainer.innerHTML = `<div class="empty">加载失败: ${e.message}</div>`;
+  }
+}
+
+function clearFlights() {
+  currentFlights = [];
+  document.getElementById("flight-table-container").innerHTML =
+    '<div class="empty" id="table-empty">请选择航线和日期查看航班</div>';
+  document.getElementById("flight-count").textContent = "";
+  document.getElementById("table-tip").style.display = "none";
+  if (chartInstance) {
+    chartInstance.dispose();
+    chartInstance = null;
+  }
+  chartSeriesNames = [];
+  const chartDom = document.getElementById("trend-chart");
+  chartDom.innerHTML = '<div class="empty" id="chart-empty">请选择航线、日期和航班查看价格走势</div>';
+}
+
+// ============================================================
+//  航班列表渲染
+// ============================================================
+function renderFlightTable() {
+  const container = document.getElementById("flight-table-container");
+  const countEl = document.getElementById("flight-count");
+
+  if (!currentFlights.length) {
+    container.innerHTML = '<div class="empty">暂无航班数据</div>';
+    countEl.textContent = "";
+    return;
+  }
+
+  countEl.textContent = `(${currentFlights.length}个航班)`;
+  document.getElementById("table-tip").style.display = "block";
+
+  let html = `<table>
+    <thead><tr>
+      <th>目的地</th><th>航司</th><th>航班号</th><th>出发</th><th>到达</th>
+      <th>出发机场</th><th>价格</th><th>变动</th><th>抓取时间</th>
+    </tr></thead><tbody>`;
+
+  currentFlights.forEach((f, i) => {
+    let changeHtml = "";
+    if (f.last_price === null) {
+      changeHtml = '<span class="tag-new">🆕 新航班</span>';
+    } else if (f.change_amount > 0) {
+      changeHtml = `<span class="price-up">📈 +${f.change_amount}元 (+${f.change_percent}%)</span>`;
+    } else if (f.change_amount < 0) {
+      changeHtml = `<span class="price-down">📉 ${f.change_amount}元 (${f.change_percent}%)</span>`;
+    } else {
+      changeHtml = '<span class="price-flat">➖ 未变动</span>';
+    }
+
+    const destName = f.route_to_name || f.route_to || '';
+    const destBadge = `<span style="display:inline-block;padding:1px 6px;border-radius:4px;font-size:11px;background:${getAirlineColor(f.airline)};color:#fff">${destName}</span>`;
+
+    const rowClick = `onclick="onFlightClick(${i})"`
+        + ` onmouseover="this.style.background='#1f2937'" onmouseout="this.style.background=''"`;
+    html += `<tr ${rowClick} style="cursor:pointer" data-idx="${i}">
+      <td>${destBadge}</td>
+      <td>${f.airline}</td>
+      <td style="color:#58a6ff;font-weight:500">${f.flight_no}</td>
+      <td>${f.departure_time}</td>
+      <td>${f.arrival_time}</td>
+      <td>${f.departure_airport}</td>
+      <td class="price">¥${f.price}</td>
+      <td>${changeHtml}</td>
+      <td style="font-size:12px;color:#8b949e">${(f.crawl_time||'').slice(0,16)}</td>
+    </tr>`;
+  });
+
+  html += "</tbody></table>";
+  container.innerHTML = html;
+}
+
+// ============================================================
+//  ECharts 趋势图
+// ============================================================
+async function onFlightClick(index) {
+  const f = currentFlights[index];
+  if (!f) return;
+
+  // 高亮选中行
+  document.querySelectorAll("#flight-table-container tr").forEach(el => el.style.background = "");
+  const row = document.querySelector(`tr[data-idx="${index}"]`);
+  if (row) row.style.background = "#1a3a5c";
+
+  // 在图里高亮对应航班
+  if (chartInstance) {
+    const seriesName = `${f.airline} ${f.flight_no}`;
+    chartInstance.dispatchAction({ type: "highlight", seriesName });
+    setTimeout(() => {
+      try { chartInstance.dispatchAction({ type: "downplay", seriesName }); } catch(e) {}
+    }, 3000);
+  }
+
+  // 滚动到图表
+  document.getElementById("trend-chart").scrollIntoView({ behavior: "smooth" });
+}
+
+const COLORS = ["#58a6ff","#3fb950","#d29922","#f85149","#bc8cff","#f778ba","#39d2c0","#ff9b53","#a5d6ff","#56d364"];
+const airlineColorMap = {};
+let airlineColorIdx = 0;
+function getAirlineColor(airline) {
+  const key = airline.replace(/\s+/g, '').substring(0, 6); // 去掉空格取前6字作为 key
+  if (!airlineColorMap[key]) {
+    airlineColorMap[key] = COLORS[airlineColorIdx % COLORS.length];
+    airlineColorIdx++;
+  }
+  return airlineColorMap[key];
+}
+
+async function loadAllTrends(from, to, date) {
+  const chartDom = document.getElementById("trend-chart");
+  const emptyEl = document.getElementById("chart-empty");
+  if (emptyEl) emptyEl.style.display = "none";
+
+  // 显示加载状态
+  if (!chartInstance) {
+    chartInstance = echarts.init(chartDom);
+  }
+  chartInstance.showLoading({ text: "加载趋势数据...", color: "#58a6ff", textColor: "#8b949e", maskColor: "rgba(13,17,23,0.8)" });
+
+  try {
+    const data = await api(`/api/trends?frm=${from}&to=${to}&date=${date}`);
+    renderMultiChart(data.trends);
+  } catch (e) {
+    chartInstance.hideLoading();
+    if (emptyEl) emptyEl.style.display = "block";
+    console.error("加载趋势失败:", e);
+  }
+}
+
+function renderMultiChart(trends) {
+  const chartDom = document.getElementById("trend-chart");
+  if (!chartInstance) {
+    chartInstance = echarts.init(chartDom);
+  }
+  chartInstance.hideLoading();
+
+  const flightList = Object.values(trends);
+  if (!flightList.length) {
+    document.getElementById("custom-legend").innerHTML = "";
+    const emptyEl = document.getElementById("chart-empty");
+    if (emptyEl) emptyEl.style.display = "block";
+    return;
+  }
+
+  // ---------- 自定义图例：按目的地上到下分组 ----------
+  const groups = {};
+  flightList.forEach(f => {
+    const dest = f.route_to_name || f.route_to || "未知";
+    if (!groups[dest]) groups[dest] = [];
+    groups[dest].push(f);
+  });
+
+  const destOrder = Object.keys(groups).sort();
+  let legendHtml = "";
+  let seriesIdx = 0;
+
+  destOrder.forEach(dest => {
+    legendHtml += `<div class="legend-group"><div class="legend-group-title">${dest}</div><div>`;
+    groups[dest].forEach(f => {
+      const color = getAirlineColor(f.airline);
+      legendHtml += `<span class="legend-item" data-idx="${seriesIdx}" onclick="toggleLegendItem(this, ${seriesIdx})">
+        <span class="legend-color" style="background:${color}"></span>${f.airline} ${f.flight_no}
+      </span>`;
+      seriesIdx++;
+    });
+    legendHtml += `</div></div>`;
+  });
+  document.getElementById("custom-legend").innerHTML = legendHtml;
+
+  // ---------- 图表数据 ----------
+  const allTimes = new Set();
+  flightList.forEach(f => f.trend.forEach(p => allTimes.add(p.time.slice(0, 16))));
+  const timeArray = [...allTimes].sort();
+
+  const series = flightList.map((f) => {
+    const priceMap = {};
+    f.trend.forEach(p => { priceMap[p.time.slice(0, 16)] = p.price; });
+    const data = timeArray.map(t => priceMap[t] ?? null);
+    const color = getAirlineColor(f.airline);
+
+    return {
+      name: `${f.airline} ${f.flight_no}`,
+      type: "line",
+      show: true,
+      data: data,
+      smooth: true,
+      connectNulls: true,
+      symbol: "circle",
+      symbolSize: 5,
+      lineStyle: { color: color, width: 2 },
+      itemStyle: { color: color },
+      emphasis: { focus: "series" },
+    };
+  });
+
+  const allPrices = flightList.flatMap(f => f.trend.map(p => p.price));
+  const minP = allPrices.length ? Math.min(...allPrices) : 0;
+  const maxP = allPrices.length ? Math.max(...allPrices) : 0;
+
+  const option = {
+    title: {
+      text: `航班价格走势对比 (${flightList.length}个航班)`,
+      textStyle: { color: "#f0f6fc", fontSize: 14 },
+      left: 10,
+      top: 5,
+    },
+    tooltip: {
+      trigger: "axis",
+      backgroundColor: "#161b22",
+      borderColor: "#30363d",
+      textStyle: { color: "#c9d1d9", fontSize: 12 },
+    },
+    legend: {
+      show: false,
+      data: series.map(s => s.name),
+      selected: Object.fromEntries(series.map(s => [s.name, true])),
+    },
+    grid: { left: 55, right: 20, top: 40, bottom: 50 },
+    xAxis: {
+      type: "category",
+      data: timeArray,
+      axisLabel: { color: "#8b949e", fontSize: 10, rotate: 30 },
+      axisLine: { lineStyle: { color: "#30363d" } },
+    },
+    yAxis: {
+      type: "value",
+      name: "¥",
+      nameTextStyle: { color: "#8b949e", fontSize: 12 },
+      axisLabel: { color: "#8b949e" },
+      splitLine: { lineStyle: { color: "#21262d" } },
+      min: minP > 0 ? minP - 100 : 0,
+      max: maxP + 100,
+    },
+    series: series,
+  };
+
+  chartSeriesNames = series.map(s => s.name);
+  chartInstance.setOption(option, true);
+  window.addEventListener("resize", () => chartInstance?.resize());
+}
+
+// 自定义图例的点击切换
+let chartSeriesNames = [];
+function toggleLegendItem(el, idx) {
+  const name = chartSeriesNames[idx];
+  if (!name || !chartInstance) return;
+  const isOff = el.classList.toggle("off");
+  chartInstance.dispatchAction({
+    type: isOff ? "legendUnSelect" : "legendSelect",
+    name: name,
+  });
+}
+
+// ============================================================
+//  初始化
+// ============================================================
+if (token) {
+  // 尝试使用已保存的 token
+  api("/api/routes").then(data => {
+    routes = data.routes;
+    showApp();
+  }).catch(() => {
+    doLogout();
+  });
+}
+</script>
+</body>
+</html>

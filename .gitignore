@@ -32,3 +32,6 @@ webhook.txt
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# 启动脚本（本地用，不上传）
+run_monitor.bat

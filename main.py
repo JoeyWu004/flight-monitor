@@ -170,35 +170,6 @@ def send_to_feishu(content, webhook_url=None):
         return False
 
 
-def format_summary_message(all_flights_by_route, run_time):
-    """格式化首次运行汇总消息"""
-    lines = [
-        f"📊 Flight-Monitor · 首次汇总 ({run_time})",
-        "=" * 45,
-    ]
-
-    total = 0
-    for key, flights in all_flights_by_route.items():
-        from_name, to_name, date_str = key
-        lines.append(f"\n✈️ {from_name} → {to_name}  {date_str}")
-        lines.append(f"   共 {len(flights)} 个航班（已排除红眼）")
-
-        # 按价格排序，全部展示
-        sorted_flights = sorted(flights, key=lambda f: f['price'])
-        for f in sorted_flights:
-            lines.append(
-                f"   ¥{f['price']:>5}  {f['airline']:<8} "
-                f"{f['departure_time']}-{f['arrival_time']}  "
-                f"{f['flight_no']}  ({f['departure_airport']})"
-            )
-
-        total += len(flights)
-
-    lines.append(f"\n{'=' * 45}")
-    lines.append(f"📌 总计: {len(all_flights_by_route)} 条航线日期, {total} 个航班")
-    lines.append(f"⏰ 下次监控: {config.MONITOR_INTERVAL_MINUTES} 分钟后")
-    return "\n".join(lines)
-
 
 def format_alert_message(alerts, run_time):
     """格式化价格变动告警消息"""
@@ -245,11 +216,18 @@ def format_alert_message(alerts, run_time):
     return "\n".join(lines)
 
 
+def _short_airport(name):
+    """缩短机场名称用于手机显示：去除"国际""机场"等通用后缀"""
+    if not name:
+        return ''
+    return re.sub(r'国际|机场', '', name)
+
 def format_alert_summary_message(alert_summary, run_time):
     """格式化告警航线+日期的完整航班报告（全部航班 + 变动信息）"""
     lines = [
-        f"📋 航班监控报告 ({run_time})",
-        "=" * 45,
+        f"📋 航班监控报告 {run_time[:10]}",
+        f"                {run_time[11:]}",
+        "=" * 15,
     ]
 
     total_flights = 0
@@ -264,24 +242,33 @@ def format_alert_summary_message(alert_summary, run_time):
             if f['last_price'] is None:
                 tag = "🆕 新航班"
             elif f['change_amount'] > 0:
-                tag = f"📈 +{f['change_amount']}元 (+{f['change_percent']}%)"
+                tag = f"📈 +{f['change_amount']}元 +{f['change_percent']}%"
             elif f['change_amount'] < 0:
-                tag = f"📉 {f['change_amount']}元 ({f['change_percent']}%)"
+                tag = f"📉 {f['change_amount']}元 {f['change_percent']}%"
             else:
                 tag = "➖ 未变动"
 
-            time_info = f"({f['time_ago']})" if f['time_ago'] else ""
+            airport = _short_airport(f.get('departure_airport', ''))
 
+            # 第一行: 价格 航司 时间
             lines.append(
-                f"   ¥{f['price']:>5}  {f['airline']:<8} "
-                f"{f['departure_time']}-{f['arrival_time']}  "
-                f"{f['flight_no']}  ({f['departure_airport']})"
+                f"   ¥{f['price']:<5} {f['airline']} "
+                f"{f['departure_time']}-{f['arrival_time']}"
             )
-            lines.append(f"        {tag} {time_info}")
+            # 第二行: 航班号 航站楼
+            lines.append(f"         {f['flight_no']}  {airport}")
+            # 第三行: 价格变动
+            if f['time_ago']:
+                lines.append(f"         {tag} · {f['time_ago']}")
+            else:
+                lines.append(f"         {tag}")
+            # 第四行: AI 分析
+            if f.get('ai_trend'):
+                lines.append(f"         {f['ai_trend']}")
 
         total_flights += len(flights)
 
-    lines.append(f"\n{'=' * 45}")
+    lines.append(f"\n{'=' * 20}")
     lines.append(f"📌 共 {len(alert_summary)} 条航线日期, {total_flights} 个航班")
     return "\n".join(lines)
 
@@ -663,6 +650,17 @@ def monitor_all_routes(debug=False):
                         change_info['time_ago'] = f"{delta.seconds // 60}分钟前"
                     else:
                         change_info['time_ago'] = "刚刚"
+                    # 价格变动时调用 AI 趋势预测
+                    if last['price'] != flight['price']:
+                        trend = predictor.predict_trend({
+                            **change_info,
+                            'route_from': route['from'],
+                            'route_to': route['to'],
+                            'old_price': last['price'],
+                            'new_price': flight['price'],
+                        })
+                        if trend:
+                            change_info['ai_trend'] = trend
                 else:
                     change_info['last_price'] = None
                     change_info['change_amount'] = 0
@@ -719,7 +717,7 @@ def monitor_all_routes(debug=False):
     }
 
 
-def run_once(debug=False, show_summary=False):
+def run_once(debug=False):
     """执行单次监控（供手动调用和调度使用）"""
     run_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     print(f"\n{'='*55}")
@@ -747,14 +745,6 @@ def run_once(debug=False, show_summary=False):
     database.cleanup_expired_alerts()
 
     # ---- 输出结果 ----
-
-    # --once 模式：显示完整汇总
-    if show_summary and result['all_flights']:
-        msg = format_summary_message(result['all_flights'], run_time)
-        if config.CONSOLE_OUTPUT:
-            print(f"\n{msg}")
-        if config.FEISHU_WEBHOOK:
-            send_to_feishu(msg)
 
     # 告警航线+日期：推送完整航班报告（全部航班+变动信息）
     # 注意：阶段1已推送过优先项则跳过，避免重复推送
@@ -898,7 +888,7 @@ if __name__ == "__main__":
         # 单次运行模式：始终显示汇总
         debug_mode = "--debug" in sys.argv
         print("  模式: 单次抓取\n")
-        run_once(debug=debug_mode, show_summary=True)
+        run_once(debug=debug_mode)
         print("\n✅ 单次抓取完成")
     elif "--help" in sys.argv or "-h" in sys.argv:
         print("""

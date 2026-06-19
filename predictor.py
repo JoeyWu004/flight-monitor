@@ -181,6 +181,7 @@ def _call_deepseek(prompt):
 
     data = resp.json()
     content = data['choices'][0]['message']['content'].strip()
+    print(f"   🤖 DeepSeek 分析完成 ({len(content)}字)")
     return f"🤖 {content}"
 
 

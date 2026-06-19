@@ -1,3 +1,4 @@
+在 cmd 中查看程序运行状态：
 ---- 立即运行（无需重启） ----
    schtasks /run /tn "FlightMonitor"
 
@@ -6,3 +7,6 @@
 
 ---- 查看状态 ----
    schtasks /query /tn "FlightMonitor"
+
+在 git bash 中查看控制台输出（替换成自己的.log路径）：
+   tail -f D:/Flight-Monitor/monitor.log

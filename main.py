@@ -568,7 +568,8 @@ def monitor_all_routes(debug=False):
         print(f"   {tag} ✅ 获取 {len(flights)} 个有效航班（已排除红眼）")
         stats['flights_found'] += len(flights)
 
-        # 存储 + 比价
+        # 存储 + 比价（同一批次统一 crawl_time，避免跨分钟边界）
+        batch_crawl_time = database.now_beijing()
         for flight in flights:
             # 查询上次价格
             last = database.get_last_price(
@@ -592,7 +593,7 @@ def monitor_all_routes(debug=False):
                 'departure_time': flight['departure_time'],
                 'arrival_time': flight['arrival_time'],
                 'price': flight['price'],
-            })
+            }, crawl_time=batch_crawl_time)
 
             # 检测价格变动（航线+日期双过滤，空列表=不过滤）
             if flight['flight_no'] and last and last['price'] != flight['price']:

@@ -91,7 +91,7 @@ def init_db():
     conn.close()
 
 
-def insert_price(record):
+def insert_price(record, crawl_time=None):
     """插入一条航班价格记录
 
     record: dict {
@@ -100,7 +100,10 @@ def insert_price(record):
         departure_airport, arrival_airport,
         departure_time, arrival_time, price
     }
+    crawl_time: 可选，统一批次时间。不传则自动取当前北京时间。
     """
+    if crawl_time is None:
+        crawl_time = now_beijing()
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("""
@@ -123,7 +126,7 @@ def insert_price(record):
         record.get('departure_time', ''),
         record.get('arrival_time', ''),
         record['price'],
-        now_beijing(),
+        crawl_time,
     ))
     conn.commit()
     conn.close()

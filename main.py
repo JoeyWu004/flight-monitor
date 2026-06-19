@@ -445,6 +445,10 @@ def parse_single_flight(flight_div):
         if is_red_eye(departure_time):
             return None
 
+        # 过滤通程/中转航班
+        if config.DIRECT_FLIGHTS_ONLY and airline == "通程航班":
+            return None
+
         return {
             'airline': airline,
             'flight_no': flight_no,

@@ -124,21 +124,19 @@ ALERT_DATES = ["2026-07-15", "2026-07-20"]         # 仅这两天
 
 ## Windows 开机自启动
 
-以**管理员身份**打开 PowerShell，执行以下命令创建计划任务：
+右键 `startup_setup.bat` → **以管理员身份运行**，脚本会自动完成：
+
+1. 检测 Python 安装位置（支持 conda / 系统 Python / 注册表）
+2. 校验 DrissionPage 依赖
+3. 创建 `登录时` 触发的计划任务
 
 ```powershell
-# 创建开机自启动任务（请替换为你的实际路径）
-schtasks /create /tn "FlightMonitor" /tr "python D:\Flight-Monitor\main.py" /sc onstart /rl highest /delay 0001:00
-
 # 手动控制
-schtasks /run /tn "FlightMonitor"    # 启动
-schtasks /end /tn "FlightMonitor"    # 停止
-
-# 删除任务
-schtasks /delete /tn "FlightMonitor" /f
+schtasks /run /tn "FlightMonitor"    # 立即启动
+schtasks /end /tn "FlightMonitor"    # 停止运行
 ```
 
-> 如果 Python 路径不在系统 PATH 中，请将 `python` 替换为完整路径，如 `C:\Users\你的用户名\AppData\Local\Programs\Python\Python311\python.exe`。
+卸载: 右键 `startup_remove.bat` → **以管理员身份运行**。
 
 ## 查看数据
 

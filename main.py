@@ -20,6 +20,7 @@ from datetime import datetime, timedelta
 
 import config
 import database
+import predictor
 
 
 # ============================================================
@@ -222,6 +223,8 @@ def format_alert_message(alerts, run_time):
                 f"{a['from_name']}→{a['to_name']} "
                 f"{a['flight_date']} {a['departure_time']}-{a['arrival_time']}"
             )
+            if a.get('ai_trend'):
+                lines.append(f"      {a['ai_trend']}")
 
     if rises:
         lines.append(f"\n📈 涨价 ({len(rises)}个):")
@@ -235,6 +238,8 @@ def format_alert_message(alerts, run_time):
                 f"{a['from_name']}→{a['to_name']} "
                 f"{a['flight_date']} {a['departure_time']}-{a['arrival_time']}"
             )
+            if a.get('ai_trend'):
+                lines.append(f"      {a['ai_trend']}")
 
     lines.append(f"\n{'=' * 45}")
     return "\n".join(lines)
@@ -612,7 +617,7 @@ def monitor_all_routes(debug=False):
                         last['price'],
                         flight['price'],
                     )
-                    alerts.append({
+                    alert_entry = {
                         **flight,
                         'flight_date': date_str,
                         'from_name': route['from_name'],
@@ -621,7 +626,14 @@ def monitor_all_routes(debug=False):
                         'new_price': flight['price'],
                         'change_amount': alert_info['change_amount'],
                         'change_percent': alert_info['change_percent'],
-                    })
+                        'route_from': route['from'],
+                        'route_to': route['to'],
+                    }
+                    # 调用 AI 趋势预测（内部自动处理数据不足/API失败等情况）
+                    trend = predictor.predict_trend(alert_entry)
+                    if trend:
+                        alert_entry['ai_trend'] = trend
+                    alerts.append(alert_entry)
                     stats['alerts_generated'] += 1
 
             # 告警航线+日期：收集全部航班（含变动信息），用于推送完整报告

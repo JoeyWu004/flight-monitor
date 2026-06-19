@@ -63,6 +63,10 @@ PRICE_CHANGE_THRESHOLD_MIN = 10  # 至少变动10元
 # 飞书机器人 Webhook 地址（留空则不推送飞书）
 FEISHU_WEBHOOK = ""
 
+# DeepSeek API 配置（用于价格趋势预测，不配则告警不附带AI分析）
+DEEPSEEK_API_KEY = ""               # DeepSeek API Key
+DEEPSEEK_MODEL = "deepseek-chat"    # 模型名称
+
 # 控制台输出开关
 CONSOLE_OUTPUT = True
 

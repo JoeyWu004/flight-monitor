@@ -241,6 +241,7 @@ let token = localStorage.getItem("fm_token") || "";
 let username = localStorage.getItem("fm_username") || "";
 let routes = [];
 let currentFlights = [];
+let currentTrends = {};
 let chartInstance = null;
 
 // ============================================================
@@ -466,6 +467,7 @@ async function loadFlights(from, toParam, date) {
 
 function clearFlights() {
   currentFlights = [];
+  currentTrends = {};
   document.getElementById("flight-table-container").innerHTML =
     '<div class="empty" id="table-empty">请选择航线和日期查看航班</div>';
   document.getElementById("flight-count").textContent = "";
@@ -497,6 +499,7 @@ function renderFlightTable() {
 
   let html = `<table>
     <thead><tr>
+      <th><input type="checkbox" id="chart-select-all" checked onchange="toggleAllChartSelect(this)" title="全选/取消"></th>
       <th>目的地</th><th>航司</th><th>航班号</th><th>出发</th><th>到达</th>
       <th>出发机场</th><th>价格</th><th>变动</th><th>抓取时间</th>
     </tr></thead><tbody>`;
@@ -516,9 +519,11 @@ function renderFlightTable() {
     const destName = f.route_to_name || f.route_to || '';
     const destBadge = `<span style="display:inline-block;padding:1px 6px;border-radius:4px;font-size:11px;background:${getAirlineColor(f.airline)};color:#fff">${destName}</span>`;
 
+    const trendKey = `${f.flight_no} (${f.route_to})`;
     const rowClick = `onclick="onFlightClick(${i})"`
         + ` onmouseover="this.style.background='#1f2937'" onmouseout="this.style.background=''"`;
     html += `<tr ${rowClick} style="cursor:pointer" data-idx="${i}">
+      <td onclick="event.stopPropagation()"><input type="checkbox" class="chart-flight-cb" checked data-key="${trendKey}" onchange="onChartSelectChange()"></td>
       <td>${destBadge}</td>
       <td>${f.airline}</td>
       <td style="color:#58a6ff;font-weight:500">${f.flight_no}</td>
@@ -585,7 +590,8 @@ async function loadAllTrends(from, to, date) {
 
   try {
     const data = await api(`/api/trends?frm=${from}&to=${to}&date=${date}`);
-    renderMultiChart(data.trends);
+    currentTrends = data.trends;
+    renderMultiChart(currentTrends);
   } catch (e) {
     chartInstance.hideLoading();
     if (emptyEl) emptyEl.style.display = "block";
@@ -605,6 +611,9 @@ function renderMultiChart(trends) {
     document.getElementById("custom-legend").innerHTML = "";
     const emptyEl = document.getElementById("chart-empty");
     if (emptyEl) emptyEl.style.display = "block";
+    if (chartInstance) {
+      chartInstance.setOption({ series: [] }, true);
+    }
     return;
   }
 
@@ -765,6 +774,34 @@ function toggleLegendItem(el, idx) {
     type: isOff ? "legendUnSelect" : "legendSelect",
     name: name,
   });
+}
+
+// 图表航班选择过滤
+function getSelectedTrendKeys() {
+  const boxes = document.querySelectorAll(".chart-flight-cb:checked");
+  return new Set(Array.from(boxes).map(cb => cb.dataset.key));
+}
+
+function onChartSelectChange() {
+  const selected = getSelectedTrendKeys();
+  const filtered = {};
+  Object.entries(currentTrends).forEach(([key, val]) => {
+    if (selected.has(key)) filtered[key] = val;
+  });
+  // 更新表头全选复选框状态
+  const allBox = document.getElementById("chart-select-all");
+  const allCbs = document.querySelectorAll(".chart-flight-cb");
+  if (allBox && allCbs.length) {
+    allBox.checked = selected.size === allCbs.length;
+    allBox.indeterminate = selected.size > 0 && selected.size < allCbs.length;
+  }
+  renderMultiChart(filtered);
+}
+
+function toggleAllChartSelect(el) {
+  const boxes = document.querySelectorAll(".chart-flight-cb");
+  boxes.forEach(cb => { cb.checked = el.checked; });
+  onChartSelectChange();
 }
 
 // ============================================================

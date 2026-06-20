@@ -8,5 +8,9 @@
 ---- 查看状态 ----
    schtasks /query /tn "FlightMonitor"
 
+---- 删计划任务 ----
+   schtasks /delete /tn "FlightMonitor" /f 
+
+
 在 git bash 中查看控制台输出（替换成自己的.log路径）：
    tail -f D:/Flight-Monitor/monitor.log

@@ -682,8 +682,9 @@ function renderMultiChart(trends) {
   let prevDay = "";
   timeArray.forEach((t, i) => {
     const day = t.slice(0, 10);
-    if (prevDay && day !== prevDay) {
-      dayBreaks.push({ xAxis: t, label: { formatter: day, position: "insideStartTop", color: "#58a6ff", fontSize: 10, distance: 8 } });
+    if (day !== prevDay) {
+      // 第一个日期也标记（prevDay="" 时 day !== "" 成立），后续换日时标记
+      dayBreaks.push({ xAxis: t, label: { formatter: day, position: "insideStartTop", rotate: 0, color: "#8b949e", fontSize: 10, distance: 12 } });
     }
     prevDay = day;
   });
@@ -732,7 +733,7 @@ function renderMultiChart(trends) {
       data: series.map(s => s.name),
       selected: Object.fromEntries(series.map(s => [s.name, true])),
     },
-    grid: { left: 55, right: 20, top: 40, bottom: 55 },
+    grid: { left: 55, right: 20, top: 65, bottom: 55 },
     xAxis: {
       type: "category",
       data: timeArray,
@@ -755,6 +756,7 @@ function renderMultiChart(trends) {
   };
 
   chartSeriesNames = series.map(s => s.name);
+  chartTotalFlights = flightList.length;
   chartInstance.setOption(option, true);
   window.addEventListener("resize", () => chartInstance?.resize());
 
@@ -762,6 +764,7 @@ function renderMultiChart(trends) {
 
 // 自定义图例的点击切换 — 与表格复选框双向同步
 let chartSeriesNames = [];
+let chartTotalFlights = 0;  // 用于动态更新标题 (x个航班)
 function toggleLegendItem(el, idx) {
   const name = chartSeriesNames[idx];
   if (!name) return;
@@ -817,6 +820,13 @@ function onChartSelectChange() {
     for (const key of selected) { if (key.includes(fNo)) { checked = true; break; } }
     el.classList.toggle("off", !checked);
   });
+
+  // 更新图表标题航班数量
+  if (chartInstance) {
+    chartInstance.setOption({
+      title: { text: `航班价格走势对比 (${selected.size}个航班)` }
+    });
+  }
 
   // 更新表头全选复选框状态
   const allBox = document.getElementById("chart-select-all");

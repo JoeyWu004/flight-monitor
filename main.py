@@ -643,7 +643,11 @@ def monitor_all_routes(debug=False):
         route_key = (route['from'], route['to'])
         if only_alert_routes and route_key not in config.ALERT_ROUTES:
             continue
+        # alert_only 航线：只在告警日期爬取，不爬满30天
+        is_alert_only = route.get('alert_only', False)
         for date_str in dates:
+            if is_alert_only and date_str not in config.ALERT_DATES:
+                continue  # alert_only 航线跳过非告警日期
             is_priority = (has_priority and
                           route_key in config.ALERT_ROUTES and
                           date_str in config.ALERT_DATES)

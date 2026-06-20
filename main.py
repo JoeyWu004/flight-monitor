@@ -521,6 +521,9 @@ def monitor_all_routes(debug=False):
     dates = get_monitor_dates()
     now = datetime.now()
 
+    # 整轮监控统一 crawl_time，保证同一批次数据时间戳一致
+    batch_crawl_time = database.now_beijing()
+
     # 构建所有 (route, date) 组合，分为优先和常规两组
     has_priority = bool(config.ALERT_ROUTES and config.ALERT_DATES)
     priority_items = []
@@ -568,8 +571,7 @@ def monitor_all_routes(debug=False):
         print(f"   {tag} ✅ 获取 {len(flights)} 个有效航班（已排除红眼）")
         stats['flights_found'] += len(flights)
 
-        # 存储 + 比价（同一批次统一 crawl_time，避免跨分钟边界）
-        batch_crawl_time = database.now_beijing()
+        # 存储 + 比价（使用整轮统一的 batch_crawl_time）
         for flight in flights:
             # 查询上次价格
             last = database.get_last_price(

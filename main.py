@@ -16,6 +16,8 @@ import json
 import re
 import io
 import sys
+import os
+import random
 from datetime import datetime, timedelta
 
 import config
@@ -132,6 +134,15 @@ def should_alert(old_price, new_price):
     pct = change / old_price * 100
     return (pct >= config.PRICE_CHANGE_THRESHOLD_PCT and
             change >= config.PRICE_CHANGE_THRESHOLD_MIN)
+
+
+def random_delay(min_sec=None, max_sec=None):
+    """随机延迟，避免机器行为被检测"""
+    lo = min_sec if min_sec is not None else config.SEARCH_DELAY_MIN
+    hi = max_sec if max_sec is not None else config.SEARCH_DELAY_MAX
+    s = random.uniform(lo, hi)
+    sleep(s)
+    return s
 
 
 # ============================================================
@@ -278,7 +289,11 @@ def format_alert_summary_message(alert_summary, run_time):
 # ============================================================
 
 def create_page(headless=True):
-    """创建浏览器页面实例，带反检测配置"""
+    """创建浏览器页面实例，带反检测配置
+
+    使用持久化 Chrome 用户目录保存 Cookie 和浏览器指纹，
+    多轮运行之间保持身份一致，绕过携程反爬。
+    """
     co = ChromiumOptions()
 
     # 反检测：去掉自动化标记
@@ -288,14 +303,33 @@ def create_page(headless=True):
     # 禁用帧率限制，headless 下虚拟列表需要正常帧率
     co.set_argument('--disable-frame-rate-limit')
     co.set_argument('--disable-background-timer-throttling')
+    # 禁用自动化提示（navigator.webdriver = false）
+    co.set_argument('--disable-features=AutomationControlled')
+    co.set_pref('excludeSwitches', ['enable-automation'])
+    co.set_pref('useAutomationExtension', False)
+    # 隐藏 headless 特征
+    if headless:
+        co.set_argument('--headless=new')  # 新版 headless 模式，指纹更接近真实
 
-    # 使用真实 User-Agent
-    co.set_argument('--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
-                    'AppleWebKit/537.36 (KHTML, like Gecko) '
-                    'Chrome/141.0.0.0 Safari/537.36')
+    # 轮换 User-Agent（多版本 Chrome，减少指纹一致性）
+    ua_list = [
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36',
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36',
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36',
+    ]
+    co.set_argument(f'--user-agent={random.choice(ua_list)}')
 
-    # 使用窗口尺寸参数设置较大视口
-    co.set_argument('--window-size=1920,1080')
+    # 随机窗口尺寸（微调，模拟真实用户屏幕差异）
+    w = random.randint(1880, 1940)
+    h = random.randint(1040, 1100)
+    co.set_argument(f'--window-size={w},{h}')
+
+    # 持久化用户数据目录（保存 Cookie、LocalStorage、浏览器指纹）
+    if config.CHROME_USER_DATA_PATH:
+        user_dir = os.path.abspath(config.CHROME_USER_DATA_PATH)
+        os.makedirs(user_dir, exist_ok=True)
+        co.set_user_data_path(user_dir)
+        co.auto_port()  # 自动选择调试端口，避免多实例冲突
 
     if headless:
         co.headless()
@@ -311,19 +345,35 @@ def build_ctrip_url(dep_code, arr_code, dep_date):
     )
 
 
-def crawl_flights_page(dep_code, arr_code, dep_date, headless=True, debug=False):
+def crawl_flights_page(dep_code, arr_code, dep_date, page=None, headless=True, debug=False):
     """抓取携程指定航线+日期的航班列表页面
 
-    返回: BeautifulSoup 对象
-    异常: 打印错误并返回 None
+    Args:
+        page: 复用的 WebPage 实例（传入则不创建/销毁，由调用方管理生命周期）
+        headless: 仅在 page 为 None 时生效
+        debug: 保存调试 HTML
+
+    返回: BeautifulSoup 对象，异常时返回 None
     """
-    page = None
+    own_page = False  # 是否本函数自行创建了 page
     try:
-        page = create_page(headless)
+        if page is None:
+            page = create_page(headless)
+            own_page = True
+
         url = build_ctrip_url(dep_code, arr_code, dep_date)
         print(f"   🌐 加载页面: {dep_code}→{arr_code} {dep_date}")
         page.get(url)
-        sleep(3)  # 等页面 JS 渲染完成
+        # 随机等待页面 JS 渲染（2~5 秒抖动）
+        sleep(random.uniform(2, 5))
+
+        # 检测是否被携程拦截（页面白屏 / 无内容）
+        html_snippet = page.html[:5000] if page.html else ""
+        if len(html_snippet) < 500 or ('flight-box' not in html_snippet and 'flight' not in html_snippet.lower()):
+            # 可能被拦截，额外等待再检查
+            sleep(random.uniform(3, 6))
+            if len(page.html or '') < 500:
+                print(f"   ⚠️ 页面内容异常（仅 {len(page.html or '')} 字符），可能被拦截")
 
         # 调试模式：保存原始 HTML（滚动前）
         if debug:
@@ -397,7 +447,7 @@ def crawl_flights_page(dep_code, arr_code, dep_date, headless=True, debug=False)
         print(f"   ❌ 页面抓取失败: {e}")
         return None
     finally:
-        if page:
+        if own_page and page:
             try:
                 page.quit()
             except Exception:
@@ -558,6 +608,9 @@ def parse_all_flights(soup):
 def monitor_all_routes(debug=False):
     """执行一轮完整的航线监控
 
+    使用单个浏览器实例复用于所有请求，配合 Chrome 用户数据目录
+    持久化 Cookie 和指纹，绕过携程反爬。
+
     返回: {
         'all_flights': dict,   # 所有抓取到的航班
         'alerts': list,        # 价格变动告警
@@ -602,28 +655,59 @@ def monitor_all_routes(debug=False):
     if has_priority and priority_items:
         print(f"   🔔 {len(priority_items)} 个优先项（告警航线+日期），将优先处理并立即推送")
 
+    # 创建共享浏览器实例（整轮复用，含持久化用户数据）
+    shared_page = None
+    try:
+        shared_page = create_page(config.HEADLESS)
+        print(f"   🌐 浏览器已启动（{'无头' if config.HEADLESS else '可见'}模式）")
+    except Exception as e:
+        print(f"   ⚠️ 共享浏览器启动失败: {e}，将逐次创建独立浏览器")
+
     # ---- 内部函数：处理单条航线+日期 ----
     def _process_route(route, date_str, is_priority):
-        """爬取、解析、存储、比价一条航线+日期组合"""
+        """爬取、解析、存储、比价一条航线+日期组合，支持空结果重试"""
         stats['routes_checked'] += 1
         key = (route['from_name'], route['to_name'], date_str)
 
         tag = "🔔" if is_priority else "  "
 
-        # 抓取页面
-        soup = crawl_flights_page(
-            route['from'], route['to'], date_str,
-            headless=config.HEADLESS,
-            debug=debug,
-        )
+        # 抓取页面（支持重试）
+        soup = None
+        flights = []
+        max_retries = config.MAX_RETRY_ON_EMPTY if not debug else 0
+        for attempt in range(1 + max_retries):
+            soup = crawl_flights_page(
+                route['from'], route['to'], date_str,
+                page=shared_page,
+                headless=config.HEADLESS,
+                debug=debug,
+            )
+
+            if not soup:
+                if attempt < max_retries:
+                    wait = random.uniform(config.RETRY_DELAY_MIN, config.RETRY_DELAY_MAX)
+                    print(f"   🔄 页面加载失败，{wait:.0f}秒后重试 ({attempt+1}/{max_retries})...")
+                    sleep(wait)
+                continue
+
+            # 解析航班
+            flights = parse_all_flights(soup)
+            if len(flights) > 0:
+                break  # 有数据，退出重试循环
+
+            # 0 个航班：可能被影子封禁或真的没航班
+            if attempt < max_retries:
+                wait = random.uniform(config.RETRY_DELAY_MIN, config.RETRY_DELAY_MAX)
+                print(f"   🔄 获取 0 个航班，{wait:.0f}秒后重试 ({attempt+1}/{max_retries})...")
+                sleep(wait)
+            elif max_retries > 0:
+                print(f"   ⚠️ 重试 {max_retries} 次后仍为 0 个航班")
 
         if not soup:
             stats['errors'] += 1
             print(f"   ⚠️ 跳过: {route['from_name']}→{route['to_name']} {date_str}")
             return
 
-        # 解析航班
-        flights = parse_all_flights(soup)
         print(f"   {tag} ✅ 获取 {len(flights)} 个有效航班（已排除红眼）")
         stats['flights_found'] += len(flights)
 
@@ -738,38 +822,48 @@ def monitor_all_routes(debug=False):
     # ================================================================
     pushed_summary_keys = set()
 
-    if priority_items:
-        print(f"\n   ╔{'═'*50}╗")
-        print(f"   ║  🔔 阶段1: 优先处理 {len(priority_items)} 个告警项")
-        print(f"   ╚{'═'*50}╝")
+    try:
+        if priority_items:
+            print(f"\n   ╔{'═'*50}╗")
+            print(f"   ║  🔔 阶段1: 优先处理 {len(priority_items)} 个告警项")
+            print(f"   ╚{'═'*50}╝")
 
-        for route, date_str in priority_items:
-            _process_route(route, date_str, is_priority=True)
-            sleep(config.SEARCH_DELAY_SECONDS)
+            for route, date_str in priority_items:
+                _process_route(route, date_str, is_priority=True)
+                random_delay()
 
-        # 优先项全部爬完 → 立即推送，不等剩余航线
-        if alert_summary:
-            push_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-            msg = format_alert_summary_message(alert_summary, push_time)
-            print(f"\n   {'─'*50}")
-            print(f"   📤 优先航线数据已就绪，立即推送（其他航线继续后台爬取）")
-            print(f"   {'─'*50}")
-            if config.CONSOLE_OUTPUT:
-                print(f"\n{msg}")
-            send_to_feishu(msg)
-            pushed_summary_keys = set(alert_summary.keys())
+            # 优先项全部爬完 → 立即推送，不等剩余航线
+            if alert_summary:
+                push_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                msg = format_alert_summary_message(alert_summary, push_time)
+                print(f"\n   {'─'*50}")
+                print(f"   📤 优先航线数据已就绪，立即推送（其他航线继续后台爬取）")
+                print(f"   {'─'*50}")
+                if config.CONSOLE_OUTPUT:
+                    print(f"\n{msg}")
+                send_to_feishu(msg)
+                pushed_summary_keys = set(alert_summary.keys())
 
-    # ================================================================
-    #  阶段2：爬取剩余航线+日期
-    # ================================================================
-    if normal_items:
-        print(f"\n   ╔{'═'*50}╗")
-        print(f"   ║  📋 阶段2: 处理剩余 {len(normal_items)} 个项目")
-        print(f"   ╚{'═'*50}╝")
+        # ================================================================
+        #  阶段2：爬取剩余航线+日期
+        # ================================================================
+        if normal_items:
+            print(f"\n   ╔{'═'*50}╗")
+            print(f"   ║  📋 阶段2: 处理剩余 {len(normal_items)} 个项目")
+            print(f"   ╚{'═'*50}╝")
 
-        for route, date_str in normal_items:
-            _process_route(route, date_str, is_priority=False)
-            sleep(config.SEARCH_DELAY_SECONDS)
+            for route, date_str in normal_items:
+                _process_route(route, date_str, is_priority=False)
+                random_delay()
+
+    finally:
+        # 确保浏览器被关闭
+        if shared_page:
+            try:
+                shared_page.quit()
+                print(f"   🌐 浏览器已关闭")
+            except Exception:
+                pass
 
     return {
         'all_flights': all_flights,
@@ -953,17 +1047,58 @@ if __name__ == "__main__":
         print("  模式: 单次抓取\n")
         run_once(debug=debug_mode)
         print("\n✅ 单次抓取完成")
+    elif "--setup" in sys.argv:
+        # 初始化 Chrome 用户数据目录：打开可见浏览器让用户手动浏览携程建立身份
+        print("""
+   ╔══════════════════════════════════════════════════╗
+   ║  🔧 Chrome 身份初始化                            ║
+   ║                                                  ║
+   ║  即将打开 Chrome 浏览器，请按以下步骤操作：        ║
+   ║  1. 浏览器会自动打开携程首页                      ║
+   ║  2. 搜索一条航线（比如 北京→泉州）                 ║
+   ║  3. 随便点点，翻翻页面，模拟真实用户               ║
+   ║  4. (可选) 登录携程账号                           ║
+   ║  5. 完成后回到终端，按 Enter 保存身份并退出        ║
+   ║                                                  ║
+   ║  之后爬虫将复用此身份，不再被识别为机器             ║
+   ╚══════════════════════════════════════════════════╝
+   """)
+        input("   按 Enter 开始...")
+
+        page = None
+        try:
+            page = create_page(headless=False)
+            print("   🌐 打开携程首页...")
+            page.get("https://flights.ctrip.com/")
+            print("   ✅ 浏览器已打开，请在上面手动搜索和浏览")
+            print("   完成后回到此窗口，按 Enter 保存并退出...")
+            input()
+            print("   💾 Chrome 身份已保存到:", os.path.abspath(config.CHROME_USER_DATA_PATH))
+        except Exception as e:
+            print(f"   ❌ 初始化失败: {e}")
+        finally:
+            if page:
+                try:
+                    page.quit()
+                except Exception:
+                    pass
     elif "--help" in sys.argv or "-h" in sys.argv:
         print("""
 用法:
   python main.py                    持续监控模式（默认），按配置的间隔循环运行
   python main.py --once             单次抓取模式，运行一次后退出
   python main.py --once --debug     调试模式，保存页面HTML并打印DOM诊断信息
+  python main.py --setup            初始化 Chrome 身份（首次使用前必须运行一次）
   python main.py --help             显示此帮助信息
 
 配置:
   编辑 config.py 修改航线、日期、监控间隔、飞书 Webhook 等
   首次运行会自动创建 flight_monitor.db 数据库文件
+
+反爬说明:
+  首次部署或遇到封禁后，请先运行 python main.py --setup
+  在打开的浏览器中手动浏览携程，建立真实 Cookie 和指纹
+  之后爬虫将复用该 Chrome 用户数据目录，每次请求使用同一身份
         """)
     else:
         # 持续监控模式

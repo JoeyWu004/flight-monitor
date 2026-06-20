@@ -534,9 +534,12 @@ def parse_single_flight(flight_div):
         if config.DIRECT_FLIGHTS_ONLY:
             if airline == "通程航班":
                 return None
-            # 有经停/中转信息（transfer-info-group 有内容 = 非直飞）
+            # transfer-info-group 有内容可能是经停也可能是中转
+            # 通过 stop-text 标签判断：有"经停"字样的是经停航班，保留
             if flight_info:
-                return None
+                stop_el = flight_div.find("span", class_="stop-text")
+                if not stop_el or '经停' not in (stop_el.text or ''):
+                    return None  # 有 transfer-info 但没有经停标记 → 中转
             # 航空公司字段包含航班号格式 = 多段拼接航班
             if re.search(r'\b[A-Z0-9]{2}\d{2,4}[A-Z]?\b', airline):
                 return None

@@ -25,6 +25,9 @@ venv/
 # 调试 HTML
 debug_*.html
 
+# Chrome 用户数据（反爬身份）
+chrome_user_data/
+
 # 敏感信息
 webhook.txt
 

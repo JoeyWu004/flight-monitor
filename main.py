@@ -285,11 +285,17 @@ def create_page(headless=True):
     co.set_argument('--disable-blink-features=AutomationControlled')
     co.set_argument('--no-sandbox')
     co.set_argument('--disable-gpu')
+    # 禁用帧率限制，headless 下虚拟列表需要正常帧率
+    co.set_argument('--disable-frame-rate-limit')
+    co.set_argument('--disable-background-timer-throttling')
 
     # 使用真实 User-Agent
     co.set_argument('--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
                     'AppleWebKit/537.36 (KHTML, like Gecko) '
                     'Chrome/141.0.0.0 Safari/537.36')
+
+    # 使用窗口尺寸参数设置较大视口
+    co.set_argument('--window-size=1920,1080')
 
     if headless:
         co.headless()
@@ -319,33 +325,63 @@ def crawl_flights_page(dep_code, arr_code, dep_date, headless=True, debug=False)
         page.get(url)
         sleep(3)  # 等页面 JS 渲染完成
 
-        # 调试模式：保存原始 HTML
+        # 调试模式：保存原始 HTML（滚动前）
         if debug:
             debug_file = f"debug_{dep_code}_{arr_code}_{dep_date}.html"
             with open(debug_file, 'w', encoding='utf-8') as f:
                 f.write(page.html)
             print(f"      🐛 调试HTML已保存: {debug_file}")
-            # 打印页面上的关键 class 用于诊断
             html = page.html
             for keyword in ['flight-box', 'flightbox', 'flight', 'price', 'airline', 'depart', 'arrive']:
                 count = html.count(keyword)
                 if count > 0:
                     print(f"      🔍 class '{keyword}' 出现 {count} 次")
 
-        # 隐藏共享航班（显示真实航班）
+        # 滚动加载全部航班（携程虚拟列表需真实滚动 + dispatchEvent 触发渲染）
+        last_count = 0
+        stable_rounds = 0
+        for i in range(max(config.SCROLL_TIMES, 40)):  # 至少 40 轮
+            sleep(config.SCROLL_DELAY_SECONDS)
+            try:
+                page.run_js("""
+                    window.scrollBy(0, 800);
+                    // 派发 scroll 事件，确保携程虚拟列表收到
+                    window.dispatchEvent(new Event('scroll', {bubbles: true}));
+                    // 也尝试直接设置列表 scrollTop
+                    const lists = document.querySelectorAll('.flight-list');
+                    lists.forEach(l => { l.scrollTop += l.clientHeight || 800; });
+                """)
+            except Exception:
+                page.scroll.to_bottom()
+            # 再调用原生滚动兜底
+            try:
+                page.scroll.to_bottom()
+            except Exception:
+                pass
+            # 检查是否有新航班加载
+            cur_count = page.html.count('flight-box')
+            if cur_count == last_count:
+                stable_rounds += 1
+                if stable_rounds >= 5:  # 连续5轮无新数据
+                    break
+            else:
+                stable_rounds = 0
+                last_count = cur_count
+            if debug:
+                print(f"      📜 第{i+1}轮滚动, flight-box: {cur_count}")
+
+        # 滚动完后回顶部再慢慢滚一遍，让虚拟列表完整渲染每个航班
         try:
-            page('#filter_item_other').click()
-            sleep(1)
-            page("@@u_key=filter_toggle_entry"
-                 "@@u_remark=点击筛选项[FILTER_GROUP_OTHER.HIDE_SHARED_FLIGHTS/隐藏共享航班]").click()
-            sleep(1)
+            page.run_js("window.scrollTo(0, 0);")
+            sleep(2)
+            for _ in range(6):
+                page.run_js("window.scrollBy(0, 600);")
+                sleep(1.5)
         except Exception:
             pass
 
-        # 滚动加载全部航班
-        for i in range(config.SCROLL_TIMES):
-            sleep(config.SCROLL_DELAY_SECONDS)
-            page.scroll.to_bottom()
+        # 最终等待，确保 DOM 完全稳定
+        sleep(3)
 
         # 调试模式：保存滚动后的 HTML
         if debug:
@@ -354,7 +390,6 @@ def crawl_flights_page(dep_code, arr_code, dep_date, headless=True, debug=False)
                 f.write(page.html)
             print(f"      🐛 滚动后HTML已保存: {debug_file2}")
 
-        sleep(1)
         soup = BeautifulSoup(page.html, "html.parser")
         return soup
 
@@ -446,7 +481,18 @@ def parse_single_flight(flight_div):
             return None
 
         # 过滤通程/中转航班
-        if config.DIRECT_FLIGHTS_ONLY and airline == "通程航班":
+        if config.DIRECT_FLIGHTS_ONLY:
+            if airline == "通程航班":
+                return None
+            # 有经停/中转信息（transfer-info-group 有内容 = 非直飞）
+            if flight_info:
+                return None
+            # 航空公司字段包含航班号格式 = 多段拼接航班
+            if re.search(r'\b[A-Z0-9]{2}\d{2,4}[A-Z]?\b', airline):
+                return None
+
+        # 过滤共享/代码共享航班（DOM 中有 <span class="plane-share">共享</span>）
+        if flight_div.find("span", string=lambda t: t and "共享" in t):
             return None
 
         return {
@@ -492,7 +538,17 @@ def parse_all_flights(soup):
     if red_eye_count > 0:
         print(f"      🔇 已过滤 {red_eye_count} 个红眼航班")
 
-    return flights
+    # 去重：同一出发+到达时间 = 代码共享航班，只保留价格最低的（通常为实际承运航司）
+    seen = {}
+    for f in flights:
+        key = (f['departure_time'], f['arrival_time'])
+        if key not in seen or f['price'] < seen[key]['price']:
+            seen[key] = f
+    deduped = list(seen.values())
+    if len(deduped) < len(flights):
+        print(f"      🔇 已过滤 {len(flights) - len(deduped)} 个代码共享航班")
+
+    return deduped
 
 
 # ============================================================

@@ -15,7 +15,13 @@ from typing import List, Optional
 
 import jwt
 from fastapi import FastAPI, HTTPException, Request
+from urllib.request import Request as UrlRequest, urlopen
+from urllib.error import URLError
 from fastapi.responses import FileResponse, JSONResponse
+
+# DeepSeek API 配置（看板聊天专用，独立于 config.py）
+DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_CHAT_KEY", "")
+DEEPSEEK_MODEL = "deepseek-chat"
 from fastapi.staticfiles import StaticFiles
 
 # ============================================================
@@ -416,6 +422,39 @@ async def get_multi_flights(
         return {"flights": result}
     finally:
         conn.close()
+
+
+@app.post("/api/chat")
+async def chat_proxy(request: Request, body: dict):
+    """代理 DeepSeek API 请求，避免前端暴露 API Key"""
+    if not DEEPSEEK_API_KEY:
+        raise HTTPException(500, "DeepSeek API Key 未配置")
+
+    messages = body.get("messages", [])
+    if not messages:
+        raise HTTPException(400, "缺少 messages 参数")
+
+    try:
+        payload = json.dumps({
+            "model": DEEPSEEK_MODEL,
+            "messages": messages,
+            "max_tokens": body.get("max_tokens", 1024),
+        }).encode("utf-8")
+        req = UrlRequest(
+            "https://api.deepseek.com/chat/completions",
+            data=payload,
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
+            },
+        )
+        with urlopen(req, timeout=60) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        return {"reply": data["choices"][0]["message"]["content"]}
+    except URLError as e:
+        raise HTTPException(502, f"DeepSeek API 请求失败: {e.reason}")
+    except Exception as e:
+        raise HTTPException(500, str(e))
 
 
 # ============================================================

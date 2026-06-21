@@ -243,6 +243,8 @@ let routes = [];
 let currentFlights = [];
 let currentTrends = {};
 let chartInstance = null;
+let hoveredSeries = null;
+let hoverTimer = null;
 
 // ============================================================
 //  API 封装
@@ -353,9 +355,6 @@ function onFromChange() {
   const from = document.getElementById("select-from").value;
   const container = document.getElementById("dest-checkboxes");
   document.getElementById("select-date").innerHTML = '<option value="">请先选择航线和日期</option>';
-  // 重置颜色映射
-  Object.keys(airlineColorMap).forEach(k => delete airlineColorMap[k]);
-  airlineColorIdx = 0;
   clearFlights();
 
   if (!from) {
@@ -413,17 +412,23 @@ async function onDestChange() {
     // 取交集
     const common = [...allDates[0]].filter(d => allDates.every(s => s.has(d)));
     dateSel.innerHTML = '<option value="">请选择日期</option>';
+    const weekMap = ['日', '一', '二', '三', '四', '五', '六'];
     common.forEach(d => {
       const opt = document.createElement("option");
       opt.value = d;
-      opt.textContent = d;
+      const dow = new Date(d + 'T00:00:00').getDay();
+      opt.textContent = d + ' ' + weekMap[dow];
       dateSel.appendChild(opt);
     });
 
-    // 如果之前选的日期还在交集中，保留并自动刷新
+    // 日期默认逻辑：优先选今天 > 保留之前选的 > 手动选择
+    const today = new Date().toISOString().slice(0, 10);
     if (prevDate && common.includes(prevDate)) {
       dateSel.value = prevDate;
-      onDateChange();  // 自动刷新数据和图表
+      onDateChange();
+    } else if (common.includes(today)) {
+      dateSel.value = today;
+      onDateChange();
     } else {
       clearFlights();
     }
@@ -472,6 +477,10 @@ function clearFlights() {
     '<div class="empty" id="table-empty">请选择航线和日期查看航班</div>';
   document.getElementById("flight-count").textContent = "";
   document.getElementById("table-tip").style.display = "none";
+  document.getElementById("custom-legend").innerHTML = "";
+  hoveredSeries = null;
+  clearTimeout(hoverTimer);
+  hoverTimer = null;
   if (chartInstance) {
     chartInstance.dispose();
     chartInstance = null;
@@ -565,14 +574,33 @@ async function onFlightClick(index) {
   document.getElementById("trend-chart").scrollIntoView({ behavior: "smooth" });
 }
 
-const COLORS = ["#58a6ff","#3fb950","#d29922","#f85149","#bc8cff","#f778ba","#39d2c0","#ff9b53","#a5d6ff","#56d364"];
+const AIRLINE_BRAND_COLORS = [
+  // [匹配关键词, 颜色, 说明]
+  ['南方航空',    '#003D7C', '南航深蓝'],
+  ['厦门航空',    '#29B6F6', '厦航天蓝'],
+  ['华夏航空',    '#1A6DC8', '华夏蓝'],
+  ['昆明航空',    '#089B7E', '昆航孔雀青'],
+  ['吉祥航空',    '#721021', '吉祥酒红'],
+  ['深圳航空',    '#C62828', '深航红'],
+  ['上海航空',    '#E96356', '上航绯红'],
+  ['河北航空',    '#F5900A', '河北金橙'],
+  ['西部航空',    '#541473', '西部紫'],
+  ['中国联合航空','#9D27B0', 'CUA紫'],
+];
+// 后备颜色：品牌色用完才用这里
+const FALLBACK_COLORS = ['#d29922','#ff9b53','#a5d6ff','#56d364','#bc8cff','#f778ba','#39d2c0'];
 const airlineColorMap = {};
-let airlineColorIdx = 0;
+let fallbackIdx = 0;
 function getAirlineColor(airline) {
-  const key = airline.replace(/\s+/g, '').substring(0, 6); // 去掉空格取前6字作为 key
+  const key = airline.replace(/\s+/g, '');
   if (!airlineColorMap[key]) {
-    airlineColorMap[key] = COLORS[airlineColorIdx % COLORS.length];
-    airlineColorIdx++;
+    const match = AIRLINE_BRAND_COLORS.find(([kw]) => key.includes(kw));
+    if (match) {
+      airlineColorMap[key] = match[1];
+    } else {
+      airlineColorMap[key] = FALLBACK_COLORS[fallbackIdx % FALLBACK_COLORS.length];
+      fallbackIdx++;
+    }
   }
   return airlineColorMap[key];
 }
@@ -665,6 +693,7 @@ function renderMultiChart(trends) {
       data: data,
       smooth: true,
       connectNulls: true,
+      triggerLineEvent: true,
       symbol: "circle",
       symbolSize: 5,
       lineStyle: { color: color, width: 2 },
@@ -712,6 +741,27 @@ function renderMultiChart(trends) {
       formatter: function (params) {
         if (!params || !params.length) return "";
         const time = params[0].name;
+        // 悬停在航班线上：只显示该航班；悬停在其他区域：显示全部
+        if (hoveredSeries) {
+          const p = params.find(x => x.seriesName === hoveredSeries);
+          if (p) {
+            const color = p.color || "#8b949e";
+            // 数据点：显示时间+价格；线段上：只显示航司航班号
+            if (p.value != null) {
+              return '<div style="font-weight:bold;margin-bottom:4px;color:#e6edf3">' + time + "</div>" +
+                '<div style="display:flex;align-items:center;gap:6px;margin:2px 0">' +
+                '<span style="display:inline-block;width:10px;height:3px;border-radius:2px;background:' + color + '"></span>' +
+                '<span>' + p.seriesName + "</span>" +
+                '<span style="margin-left:auto">¥' + p.value + "</span>" +
+                "</div>";
+            } else {
+              return '<div style="display:flex;align-items:center;gap:6px">' +
+                '<span style="display:inline-block;width:10px;height:3px;border-radius:2px;background:' + color + '"></span>' +
+                '<span>' + p.seriesName + "</span>" +
+                "</div>";
+            }
+          }
+        }
         const valid = params.filter(p => p.value != null);
         if (!valid.length) return "";
         valid.sort((a, b) => a.value - b.value);
@@ -758,6 +808,24 @@ function renderMultiChart(trends) {
   chartSeriesNames = series.map(s => s.name);
   chartTotalFlights = flightList.length;
   chartInstance.setOption(option, true);
+  hoveredSeries = null;
+  chartInstance.off('mouseover').off('mouseout').off('globalout');
+  chartInstance.on('mouseover', function (p) {
+    if (p.seriesName) {
+      clearTimeout(hoverTimer);
+      hoveredSeries = p.seriesName;
+    }
+  });
+  chartInstance.on('mouseout', function () {
+    hoverTimer = setTimeout(function () {
+      hoveredSeries = null;
+      if (chartInstance) chartInstance.dispatchAction({ type: 'showTip' }); // 刷新弹窗
+    }, 150);
+  });
+  chartInstance.on('globalout', function () {
+    clearTimeout(hoverTimer);
+    hoveredSeries = null;
+  });
   window.addEventListener("resize", () => chartInstance?.resize());
 
 }
@@ -820,6 +888,29 @@ function onChartSelectChange() {
     for (const key of selected) { if (key.includes(fNo)) { checked = true; break; } }
     el.classList.toggle("off", !checked);
   });
+
+  // 根据可见序列动态调整 Y 轴范围
+  const meta = window.__chartSeriesMeta || [];
+  let yMin = Infinity, yMax = -Infinity;
+  chartSeriesNames.forEach(name => {
+    const flightNo = name.split(" ").pop();
+    let checked = false;
+    for (const key of selected) { if (key.includes(flightNo)) { checked = true; break; } }
+    if (!checked) return;
+    const m = meta.find(m => m.name === name);
+    if (m && m.data) {
+      const prices = m.data.filter(v => v != null);
+      if (prices.length) {
+        yMin = Math.min(yMin, ...prices);
+        yMax = Math.max(yMax, ...prices);
+      }
+    }
+  });
+  if (yMin !== Infinity && yMax !== -Infinity) {
+    chartInstance.setOption({
+      yAxis: { min: yMin - 50, max: yMax + 50 }
+    });
+  }
 
   // 更新图表标题航班数量
   if (chartInstance) {

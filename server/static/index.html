@@ -160,6 +160,83 @@ tr:hover td { background: #1c2128; }
   .main { padding: 10px; }
   .chart-section, .table-section { padding: 12px; }
 }
+
+/* ========== AI 聊天 ========== */
+.chat-btn {
+  position: fixed; bottom: 24px; right: 24px; z-index: 1000;
+  width: 52px; height: 52px; border-radius: 50%;
+  background: #238636; color: #fff; border: none;
+  font-size: 24px; cursor: pointer; box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+  display: flex; align-items: center; justify-content: center;
+  transition: transform .2s, background .2s;
+}
+.chat-btn:hover { background: #2ea043; transform: scale(1.08); }
+.chat-modal-mask {
+  display: none; position: fixed; inset: 0; z-index: 2000;
+  background: rgba(0,0,0,0.55); justify-content: center; align-items: center;
+}
+.chat-modal-mask.show { display: flex; }
+.chat-modal {
+  background: #161b22; border: 1px solid #30363d; border-radius: 12px;
+  width: 420px; max-width: 90vw; max-height: 560px;
+  display: flex; flex-direction: column; box-shadow: 0 12px 40px rgba(0,0,0,0.6);
+}
+.chat-modal-header {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 14px 18px; border-bottom: 1px solid #21262d;
+}
+.chat-modal-header span { font-size: 15px; font-weight: 600; color: #f0f6fc; }
+.chat-modal-header button {
+  background: none; border: none; color: #8b949e; font-size: 20px; cursor: pointer;
+}
+.chat-modal-header button:hover { color: #f0f6fc; }
+.chat-messages {
+  flex: 1; overflow-y: auto; padding: 14px 18px;
+  display: flex; flex-direction: column; gap: 10px;
+  max-height: 380px;
+}
+.chat-msg {
+  max-width: 85%; padding: 10px 14px; border-radius: 10px;
+  font-size: 13px; line-height: 1.55; word-break: break-word;
+}
+.chat-msg.user {
+  align-self: flex-end; background: #1f6feb; color: #fff;
+  border-bottom-right-radius: 4px;
+}
+.chat-msg.ai {
+  align-self: flex-start; background: #21262d; color: #c9d1d9;
+  border-bottom-left-radius: 4px;
+}
+.chat-msg.loading { background: transparent; color: #8b949e; font-style: italic; }
+.chat-input-row {
+  display: flex; gap: 8px; padding: 12px 18px; border-top: 1px solid #21262d;
+}
+.chat-input-row textarea {
+  flex: 1; background: #0d1117; border: 1px solid #30363d;
+  border-radius: 8px; color: #f0f6fc; font-size: 13px; padding: 8px 10px;
+  resize: none; outline: none; font-family: inherit; rows: 1;
+}
+.chat-input-row textarea:focus { border-color: #58a6ff; }
+.chat-input-row button {
+  background: #238636; color: #fff; border: none; border-radius: 8px;
+  padding: 8px 16px; font-size: 13px; cursor: pointer; font-weight: 600;
+}
+.chat-input-row button:hover { background: #2ea043; }
+.chat-input-row button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* AI 引导标签 */
+.chat-guide-tag {
+  position: fixed; bottom: 36px; right: 82px; z-index: 1001;
+  background: #1f6feb; color: #fff; border-radius: 6px;
+  padding: 4px 8px; font-size: 12px; white-space: nowrap;
+  display: flex; align-items: center; gap: 6px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+}
+.chat-guide-tag .guide-close {
+  background: none; border: none; color: rgba(255,255,255,0.7);
+  font-size: 14px; cursor: pointer; line-height: 1; padding: 0;
+}
+.chat-guide-tag .guide-close:hover { color: #fff; }
 </style>
 </head>
 <body>
@@ -228,6 +305,26 @@ tr:hover td { background: #1c2128; }
       <p id="table-tip" style="color:#8b949e;font-size:12px;margin-bottom:10px;display:none">💡 点击任意航班行即可在上方查看该航班的价格走势</p>
       <div id="flight-table-container">
         <div class="empty" id="table-empty">请选择航线和日期查看航班</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- AI 聊天按钮和弹窗 -->
+  <button class="chat-btn" onclick="toggleChat()" title="AI 助手">🤖</button>
+  <span class="chat-guide-tag" id="chat-guide">
+    AI 助手
+    <button class="guide-close" onclick="dismissGuide()">&times;</button>
+  </span>
+  <div class="chat-modal-mask" id="chat-modal-mask" onclick="closeChat(event)">
+    <div class="chat-modal" onclick="event.stopPropagation()">
+      <div class="chat-modal-header">
+        <span>🤖 AI 航班助手</span>
+        <button onclick="toggleChat()">&times;</button>
+      </div>
+      <div class="chat-messages" id="chat-messages"></div>
+      <div class="chat-input-row">
+        <textarea id="chat-input" rows="1" placeholder="问点什么..."></textarea>
+        <button id="chat-send-btn" onclick="sendChat()">发送</button>
       </div>
     </div>
   </div>
@@ -321,6 +418,7 @@ async function showApp() {
   document.getElementById("login-page").style.display = "none";
   document.getElementById("app-page").style.display = "flex";
   document.getElementById("username-display").textContent = `👤 ${username}`;
+  showGuide(); // 如果之前关闭过则隐藏，否则显示
 
   // 加载航线列表
   try {
@@ -946,6 +1044,147 @@ if (token) {
     doLogout();
   });
 }
+
+// ============================================================
+//  AI 聊天
+// ============================================================
+let chatHistory = [];
+
+function showGuide() {
+  document.getElementById("chat-guide").style.display = "";
+}
+function dismissGuide() {
+  document.getElementById("chat-guide").style.display = "none";
+}
+function toggleChat() {
+  dismissGuide();
+  const mask = document.getElementById("chat-modal-mask");
+  mask.classList.toggle("show");
+  if (mask.classList.contains("show")) {
+    document.getElementById("chat-input").focus();
+  }
+}
+
+function closeChat(e) {
+  if (e && e.target !== document.getElementById("chat-modal-mask")) return;
+  document.getElementById("chat-modal-mask").classList.remove("show");
+}
+
+function addChatMsg(role, text) {
+  const container = document.getElementById("chat-messages");
+  const div = document.createElement("div");
+  div.className = "chat-msg " + role;
+  div.textContent = text;
+  container.appendChild(div);
+  container.scrollTop = container.scrollHeight;
+  return div;
+}
+
+async function sendChat() {
+  const input = document.getElementById("chat-input");
+  const btn = document.getElementById("chat-send-btn");
+  const text = input.value.trim();
+  if (!text) return;
+
+  input.value = "";
+  input.style.height = "auto";
+  btn.disabled = true;
+
+  addChatMsg("user", text);
+  chatHistory.push({ role: "user", content: text });
+
+  // 构建页面上下文（含真实航班数据）
+  const fromSel = document.getElementById("select-from");
+  const fromName = fromSel.options[fromSel.selectedIndex]?.textContent || "";
+  const destChecks = document.querySelectorAll("#dest-checkboxes input[type=checkbox]:checked");
+  const destNames = Array.from(destChecks).map(cb => {
+    const label = cb.parentElement;
+    return label ? label.textContent.trim() : cb.value;
+  });
+  const dateSel = document.getElementById("select-date");
+  const dateText = dateSel.options[dateSel.selectedIndex]?.textContent || "";
+  const ctxParts = [];
+  if (fromName) ctxParts.push("出发城市=" + fromName);
+  if (destNames.length) ctxParts.push("到达城市=" + destNames.join("、"));
+  if (dateText) ctxParts.push("航班日期=" + dateText);
+
+  // 附上真实航班列表
+  if (currentFlights.length) {
+    const flightInfo = currentFlights.map(f =>
+      `[${f.airline} ${f.flight_no}] ${f.departure_time}→${f.arrival_time} ${f.departure_airport} 目的地${f.route_to_name||f.route_to} ¥${f.price}`
+    ).join("\n");
+    ctxParts.push("当前航班列表（共" + currentFlights.length + "个）：\n" + flightInfo);
+  }
+  // 附上趋势数据摘要（每个航班最近几天的价格）
+  if (Object.keys(currentTrends).length) {
+    const trendLines = [];
+    for (const [key, fl] of Object.entries(currentTrends)) {
+      const prices = fl.trend.map(p => p.price);
+      const recent = fl.trend.slice(-7).map(p => p.time.slice(0, 16) + " ¥" + p.price).join(", ");
+      if (prices.length >= 2) {
+        const min = Math.min(...prices), max = Math.max(...prices);
+        const avg = Math.round(prices.reduce((a,b)=>a+b,0) / prices.length);
+        const std = Math.round(Math.sqrt(prices.reduce((s,p)=>s+(p-avg)**2,0)/prices.length));
+        trendLines.push(`${fl.airline} ${fl.flight_no}: 均价¥${avg} 最低¥${min} 最高¥${max} 标准差¥${std} | 最近: ${recent}`);
+      }
+    }
+    if (trendLines.length) ctxParts.push("价格趋势摘要：\n" + trendLines.join("\n"));
+  }
+  const pageCtx = ctxParts.length ? "\n【当前页面真实数据，请据此回答不要编造】" + ctxParts.join("\n") : "";
+
+  const loadingDiv = addChatMsg("ai", "思考中...");
+  loadingDiv.classList.add("loading");
+
+  try {
+    const resp = await fetch("/api/chat", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer " + token,
+      },
+      body: JSON.stringify({
+        messages: [
+          { role: "system", content: "你是航班价格监控助手。用户在看Flight-Monitor数据看板，可以回答航班价格、趋势分析、出行建议等问题。请简洁回答。" + pageCtx },
+          ...chatHistory,
+        ],
+      }),
+    });
+    const data = await resp.json();
+    loadingDiv.remove();
+
+    const reply = data.reply || "抱歉，请求失败：" + (data.detail || JSON.stringify(data));
+    addChatMsg("ai", reply);
+    chatHistory.push({ role: "assistant", content: reply });
+
+    // 限制历史长度
+    if (chatHistory.length > 20) chatHistory = chatHistory.slice(-20);
+  } catch (e) {
+    loadingDiv.remove();
+    addChatMsg("ai", "网络错误: " + e.message);
+  }
+  btn.disabled = false;
+  document.getElementById("chat-input").focus();
+}
+
+// 文本框自动撑高
+function autoResizeChatInput() {
+  const ta = document.getElementById("chat-input");
+  ta.style.height = "auto";
+  ta.style.height = ta.scrollHeight + "px";
+}
+document.getElementById("chat-input").addEventListener("input", autoResizeChatInput);
+
+// 回车发送（发送后重置高度）
+document.addEventListener("keydown", function (e) {
+  if (e.key === "Enter" && !e.shiftKey && document.getElementById("chat-modal-mask").classList.contains("show")) {
+    e.preventDefault();
+    sendChat();
+    setTimeout(function () {
+      const ta = document.getElementById("chat-input");
+      ta.style.height = "auto";
+    }, 50);
+  }
+});
 </script>
 </body>
 </html>

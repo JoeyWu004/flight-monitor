@@ -80,6 +80,15 @@ body {
 }
 .filter-group select:focus { border-color: #58a6ff; }
 
+/* 日期前后导航按钮 */
+.date-nav-btn {
+  background: #21262d; color: #c9d1d9; border: 1px solid #30363d;
+  border-radius: 6px; padding: 8px 10px; font-size: 13px; cursor: pointer;
+  transition: background .15s; flex-shrink: 0;
+}
+.date-nav-btn:hover { background: #30363d; }
+.date-nav-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
 /* 图表区 */
 .chart-section {
   background: #161b22; border: 1px solid #30363d;
@@ -280,11 +289,16 @@ tr:hover td { background: #1c2128; }
           <span style="color:#8b949e;font-size:13px">请先选择出发城市</span>
         </div>
       </div>
-      <div class="filter-group">
+      <div class="filter-group" style="flex:2;min-width:300px">
         <label>航班日期</label>
-        <select id="select-date" onchange="onDateChange()">
-          <option value="">请先选择航线和日期</option>
-        </select>
+        <div style="display:flex;gap:6px;align-items:center">
+          <button class="date-nav-btn" onclick="goNextDay()" title="前一天">◀</button>
+          <select id="select-date" onchange="onDateChange()" style="flex:1;min-width:150px">
+            <option value="">请先选择航线和日期</option>
+          </select>
+          <button class="date-nav-btn" onclick="goPrevDay()" title="后一天">▶</button>
+          <button class="date-nav-btn" onclick="goToday()" title="回到今天" style="font-size:12px">今天</button>
+        </div>
       </div>
     </div>
 
@@ -547,6 +561,36 @@ async function onDateChange() {
 
   const toParam = dests.join(",");
   await loadFlights(from, toParam, date);
+}
+
+function goPrevDay() {
+  const sel = document.getElementById("select-date");
+  const idx = sel.selectedIndex;
+  if (idx > 1) {
+    sel.selectedIndex = idx - 1;
+    onDateChange();
+  }
+}
+
+function goNextDay() {
+  const sel = document.getElementById("select-date");
+  const idx = sel.selectedIndex;
+  if (idx < sel.options.length - 1) {
+    sel.selectedIndex = idx + 1;
+    onDateChange();
+  }
+}
+
+function goToday() {
+  const sel = document.getElementById("select-date");
+  const today = new Date().toISOString().slice(0, 10);
+  for (let i = 0; i < sel.options.length; i++) {
+    if (sel.options[i].value === today) {
+      sel.selectedIndex = i;
+      onDateChange();
+      return;
+    }
+  }
 }
 
 // ============================================================

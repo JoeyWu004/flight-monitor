@@ -93,7 +93,7 @@ def get_monitor_dates():
     dates = [(today + timedelta(days=i)).strftime('%Y-%m-%d')
              for i in range(config.MONITOR_DAYS_AHEAD)]
     # 告警日期始终纳入监控范围
-    for d in config.ALERT_DATES:
+    for d in {d for dates in config.ALARM.values() for d in dates}:
         if d not in dates:
             dates.append(d)
     dates.sort()
@@ -637,23 +637,24 @@ def monitor_all_routes(debug=False):
     batch_crawl_time = database.now_beijing()
 
     # 构建所有 (route, date) 组合，分为优先和常规两组
-    has_priority = bool(config.ALERT_ROUTES and config.ALERT_DATES)
+    has_priority = bool(config.ALARM)
     priority_items = []
     normal_items = []
     # MONITOR_DAYS_AHEAD=0 且有告警航线时，只爬告警航线（不爬无关航线）
-    only_alert_routes = (config.MONITOR_DAYS_AHEAD == 0 and config.ALERT_ROUTES)
+    only_alert_routes = (config.MONITOR_DAYS_AHEAD == 0 and config.ALARM)
+    all_alert_dates = {d for dates in config.ALARM.values() for d in dates}
     for route in config.ROUTES:
         route_key = (route['from'], route['to'])
-        if only_alert_routes and route_key not in config.ALERT_ROUTES:
+        if only_alert_routes and route_key not in config.ALARM:
             continue
         # alert_only 航线：只在告警日期爬取，不爬满30天
         is_alert_only = route.get('alert_only', False)
         for date_str in dates:
-            if is_alert_only and date_str not in config.ALERT_DATES:
+            if is_alert_only and date_str not in all_alert_dates:
                 continue  # alert_only 航线跳过非告警日期
             is_priority = (has_priority and
-                          route_key in config.ALERT_ROUTES and
-                          date_str in config.ALERT_DATES)
+                          route_key in config.ALARM and
+                          date_str in config.ALARM.get(route_key, []))
             if is_priority:
                 priority_items.append((route, date_str))
             else:
@@ -747,8 +748,8 @@ def monitor_all_routes(debug=False):
             # 检测价格变动（航线+日期双过滤，空列表=不过滤）
             if flight['flight_no'] and last and last['price'] != flight['price']:
                 route_key = (route['from'], route['to'])
-                route_ok = (not config.ALERT_ROUTES or route_key in config.ALERT_ROUTES)
-                date_ok = (not config.ALERT_DATES or date_str in config.ALERT_DATES)
+                route_ok = (not config.ALARM or route_key in config.ALARM)
+                date_ok = (not config.ALARM or date_str in config.ALARM.get(route_key, []))
                 if route_ok and date_ok and should_alert(last['price'], flight['price']):
                     alert_info = database.insert_alert(
                         flight['flight_no'],
@@ -956,12 +957,13 @@ def run_scheduled():
 
     # 显示日期范围（常规日期 + 告警日期合并）
     monitor_dates = get_monitor_dates()
-    for d in config.ALERT_DATES:
+    all_alert_dates = sorted({d for dates in config.ALARM.values() for d in dates})
+    for d in all_alert_dates:
         if d not in monitor_dates:
             monitor_dates.append(d)
     monitor_dates.sort()
     if not monitor_dates:
-        print(f"   ❌ 无日期可监控。请在 config.py 中设置 MONITOR_DAYS_AHEAD >= 1 或配置 ALERT_DATES。")
+        print(f"   ❌ 无日期可监控。请在 config.py 中设置 MONITOR_DAYS_AHEAD >= 1 或配置 ALARM。")
         return
     print(f"   日期范围: {monitor_dates[0]} ~ {monitor_dates[-1]} (共{len(monitor_dates)}天)")
 
@@ -969,14 +971,13 @@ def run_scheduled():
     print(f"   监控间隔: {config.MONITOR_INTERVAL_MINUTES} 分钟")
     print(f"   红眼过滤: {config.RED_EYE_START_HOUR}:00 ~ {config.RED_EYE_END_HOUR}:00")
     print(f"   告警阈值: 变动 ≥ {config.PRICE_CHANGE_THRESHOLD_PCT}% 且 ≥ ¥{config.PRICE_CHANGE_THRESHOLD_MIN}")
-    if config.ALERT_ROUTES:
-        route_names = [f"{r[0]}→{r[1]}" for r in config.ALERT_ROUTES]
+    if config.ALARM:
+        route_names = [f"{r[0]}→{r[1]}" for r in config.ALARM]
         print(f"   告警航线: {', '.join(route_names)}")
+        for r, dates in config.ALARM.items():
+            print(f"      {r[0]}→{r[1]}: {', '.join(sorted(dates))}")
     else:
         print(f"   告警航线: 全部（{len(config.ROUTES)}条）")
-    if config.ALERT_DATES:
-        print(f"   告警日期: {', '.join(config.ALERT_DATES)}")
-    else:
         print(f"   告警日期: 全部（{len(monitor_dates)}天）")
 
     if config.FEISHU_WEBHOOK:
@@ -1025,7 +1026,7 @@ if __name__ == "__main__":
     # 计算日期信息（常规日期 + 告警日期，去重排序）
     monitor_dates = get_monitor_dates()
     # 告警日期始终纳入监控范围（即使 MONITOR_DAYS_AHEAD=0）
-    for d in config.ALERT_DATES:
+    for d in {d for dates in config.ALARM.values() for d in dates}:
         if d not in monitor_dates:
             monitor_dates.append(d)
     monitor_dates.sort()
@@ -1045,7 +1046,7 @@ if __name__ == "__main__":
     print(f"{'='*55}")
 
     if not monitor_dates:
-        print(f"❌ 没有要监控的日期。请在 config.py 中设置 MONITOR_DAYS_AHEAD >= 1 或配置 ALERT_DATES。")
+        print(f"❌ 没有要监控的日期。请在 config.py 中设置 MONITOR_DAYS_AHEAD >= 1 或配置 ALARM。")
         sys.exit(1)
 
     if "--once" in sys.argv:

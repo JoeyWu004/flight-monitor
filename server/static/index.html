@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Flight-Monitor 数据看板</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='80' font-size='80'>🛫</text></svg>">
 <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -118,6 +119,22 @@ tr:hover td { background: #1c2128; }
 .price-flat { color: #8b949e; }
 .tag-new { color: #58a6ff; font-size: 12px; }
 
+/* 排序箭头 */
+.sort-header {
+  cursor: pointer; user-select: none; position: relative; padding-right: 38px !important;
+}
+.sort-header:hover { color: #f0f6fc; }
+.sort-arrows {
+  display: inline-flex; flex-direction: column; position: absolute; right: 8px; top: 50%;
+  transform: translateY(-50%); gap: 0; line-height: 1;
+}
+.sort-arrow {
+  font-size: 10px; color: #484f58; cursor: pointer; transition: color .15s;
+  line-height: 1.1; padding: 0 2px;
+}
+.sort-arrow:hover { color: #8b949e; }
+.sort-arrow.active { color: #58a6ff; }
+
 /* 加载 & 空状态 */
 .loading, .empty {
   text-align: center; color: #8b949e; padding: 40px; font-size: 14px;
@@ -173,13 +190,13 @@ tr:hover td { background: #1c2128; }
 /* ========== AI 聊天 ========== */
 .chat-btn {
   position: fixed; bottom: 24px; right: 24px; z-index: 1000;
-  width: 52px; height: 52px; border-radius: 50%;
-  background: #238636; color: #fff; border: none;
-  font-size: 24px; cursor: pointer; box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+  width: 44px; height: 44px;
+  background: transparent; color: #c9d1d9; border: none;
+  font-size: 32px; cursor: pointer;
   display: flex; align-items: center; justify-content: center;
-  transition: transform .2s, background .2s;
+  transition: transform .2s, color .2s;
 }
-.chat-btn:hover { background: #2ea043; transform: scale(1.08); }
+.chat-btn:hover { color: #58a6ff; transform: scale(1.15); }
 .chat-modal-mask {
   display: none; position: fixed; inset: 0; z-index: 2000;
   background: rgba(0,0,0,0.55); justify-content: center; align-items: center;
@@ -246,6 +263,21 @@ tr:hover td { background: #1c2128; }
   font-size: 14px; cursor: pointer; line-height: 1; padding: 0;
 }
 .chat-guide-tag .guide-close:hover { color: #fff; }
+
+/* 底部 */
+.footer {
+  background: #161b22; border-top: 1px solid #30363d;
+  padding: 16px 20px; text-align: center; font-size: 12px; color: #484f58;
+  line-height: 1.8; margin-top: auto;
+}
+.footer a { color: #58a6ff; text-decoration: none; }
+.footer a:hover { text-decoration: underline; }
+.footer .sep { color: #21262d; margin: 0 8px; }
+.footer .github-icon {
+  display: inline-block; width: 14px; height: 14px; vertical-align: text-bottom;
+  margin-right: 2px; fill: #484f58;
+}
+.footer a:hover .github-icon { fill: #58a6ff; }
 </style>
 </head>
 <body>
@@ -342,6 +374,15 @@ tr:hover td { background: #1c2128; }
       </div>
     </div>
   </div>
+
+  <!-- 底部 -->
+  <footer class="footer">
+    © 2026 Flight-Monitor <span class="sep">|</span> Powered by FastAPI + ECharts <span class="sep">|</span> 数据仅供参考，实际价格以航司官网为准
+    <span class="sep">|</span> <a href="https://github.com/JoeyWu004/Flight-Monitor" target="_blank">
+      <svg class="github-icon" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+      @JoeyWu004
+    </a>
+  </footer>
 </div>
 
 <script>
@@ -356,6 +397,10 @@ let currentTrends = {};
 let chartInstance = null;
 let hoveredSeries = null;
 let hoverTimer = null;
+
+// 排序状态（默认按价格升序）
+let sortColumn = "price";
+let sortDirection = "asc";  // "asc" | "desc"
 
 // ============================================================
 //  API 封装
@@ -648,14 +693,86 @@ function renderFlightTable() {
   countEl.textContent = `(${currentFlights.length}个航班)`;
   document.getElementById("table-tip").style.display = "block";
 
+  // 时间解析：处理 +1 天（如 "23:50+1" → 第2天凌晨）
+  function parseTimeToMinutes(t) {
+    if (!t) return 0;
+    let days = 0;
+    // 匹配 +天数（+1, +2 等）
+    const dayMatch = t.match(/\+(\d+)$/);
+    if (dayMatch) {
+      days = parseInt(dayMatch[1]);
+      t = t.replace(/\+(\d+)$/, "").trim();
+    }
+    const parts = t.split(":");
+    const h = parseInt(parts[0]) || 0;
+    const m = parseInt(parts[1]) || 0;
+    return h * 60 + m + days * 1440;
+  }
+
+  // 排序
+  const sorted = [...currentFlights].sort((a, b) => {
+    let va, vb;
+    switch (sortColumn) {
+      case "airline":
+        va = (a.airline || "").toLowerCase();
+        vb = (b.airline || "").toLowerCase();
+        return sortDirection === "asc" ? va.localeCompare(vb) : vb.localeCompare(va);
+      case "departure_time":
+        va = parseTimeToMinutes(a.departure_time);
+        vb = parseTimeToMinutes(b.departure_time);
+        return sortDirection === "asc" ? va - vb : vb - va;
+      case "arrival_time":
+        va = parseTimeToMinutes(a.arrival_time);
+        vb = parseTimeToMinutes(b.arrival_time);
+        return sortDirection === "asc" ? va - vb : vb - va;
+      case "departure_airport":
+        va = (a.departure_airport || "").toLowerCase();
+        vb = (b.departure_airport || "").toLowerCase();
+        return sortDirection === "asc" ? va.localeCompare(vb) : vb.localeCompare(va);
+      case "arrival_airport":
+        va = (a.arrival_airport || "").toLowerCase();
+        vb = (b.arrival_airport || "").toLowerCase();
+        return sortDirection === "asc" ? va.localeCompare(vb) : vb.localeCompare(va);
+      case "price":
+        va = a.price || 0;
+        vb = b.price || 0;
+        return sortDirection === "asc" ? va - vb : vb - va;
+      case "change_amount":
+        // null 视为 0，排在最后
+        va = a.last_price === null ? (sortDirection === "asc" ? Infinity : -Infinity) : (a.change_amount || 0);
+        vb = b.last_price === null ? (sortDirection === "asc" ? Infinity : -Infinity) : (b.change_amount || 0);
+        return sortDirection === "asc" ? va - vb : vb - va;
+      default:
+        return 0;
+    }
+  });
+
+  // 生成排序箭头 HTML
+  function sortArrow(col) {
+    const upActive = sortColumn === col && sortDirection === "asc" ? " active" : "";
+    const downActive = sortColumn === col && sortDirection === "desc" ? " active" : "";
+    return `<span class="sort-arrows">
+      <span class="sort-arrow${upActive}" onclick="event.stopPropagation();setSort('${col}','asc')">▲</span>
+      <span class="sort-arrow${downActive}" onclick="event.stopPropagation();setSort('${col}','desc')">▼</span>
+    </span>`;
+  }
+
   let html = `<table>
     <thead><tr>
       <th><input type="checkbox" id="chart-select-all" checked onchange="toggleAllChartSelect(this)" title="全选/取消"></th>
-      <th>目的地</th><th>航司</th><th>航班号</th><th>出发</th><th>到达</th>
-      <th>出发机场</th><th>价格</th><th>变动</th><th>抓取时间</th>
+      <th>目的地</th>
+      <th class="sort-header">航司${sortArrow("airline")}</th>
+      <th>航班号</th>
+      <th class="sort-header">出发${sortArrow("departure_time")}</th>
+      <th class="sort-header">到达${sortArrow("arrival_time")}</th>
+      <th class="sort-header">出发机场${sortArrow("departure_airport")}</th>
+      <th class="sort-header">到达机场${sortArrow("arrival_airport")}</th>
+      <th class="sort-header">价格${sortArrow("price")}</th>
+      <th class="sort-header">变动${sortArrow("change_amount")}</th>
+      <th>抓取时间</th>
     </tr></thead><tbody>`;
 
-  currentFlights.forEach((f, i) => {
+  sorted.forEach((f, i) => {
     let changeHtml = "";
     if (f.last_price === null) {
       changeHtml = '<span class="tag-new">🆕 新航班</span>';
@@ -671,9 +788,11 @@ function renderFlightTable() {
     const destBadge = `<span style="display:inline-block;padding:1px 6px;border-radius:4px;font-size:11px;background:${getAirlineColor(f.airline)};color:#fff">${destName}</span>`;
 
     const trendKey = `${f.flight_no} (${f.route_to})`;
-    const rowClick = `onclick="onFlightClick(${i})"`
+    // 找到排序后航班在原数组中的索引，用于 onFlightClick
+    const origIdx = currentFlights.indexOf(f);
+    const rowClick = `onclick="onFlightClick(${origIdx})"`
         + ` onmouseover="this.style.background='#1f2937'" onmouseout="this.style.background=''"`;
-    html += `<tr ${rowClick} style="cursor:pointer" data-idx="${i}">
+    html += `<tr ${rowClick} style="cursor:pointer" data-idx="${origIdx}">
       <td onclick="event.stopPropagation()"><input type="checkbox" class="chart-flight-cb" checked data-key="${trendKey}" onchange="onChartSelectChange()"></td>
       <td>${destBadge}</td>
       <td>${f.airline}</td>
@@ -681,6 +800,7 @@ function renderFlightTable() {
       <td>${f.departure_time}</td>
       <td>${f.arrival_time}</td>
       <td>${f.departure_airport}</td>
+      <td>${f.arrival_airport || ''}</td>
       <td class="price">¥${f.price}</td>
       <td>${changeHtml}</td>
       <td style="font-size:12px;color:#8b949e">${(f.crawl_time||'').slice(0,16)}</td>
@@ -689,6 +809,12 @@ function renderFlightTable() {
 
   html += "</tbody></table>";
   container.innerHTML = html;
+}
+
+function setSort(col, dir) {
+  sortColumn = col;
+  sortDirection = dir;
+  renderFlightTable();
 }
 
 // ============================================================

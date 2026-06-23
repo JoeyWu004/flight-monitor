@@ -198,7 +198,7 @@ echo [4/5] 生成启动脚本...
 set LAUNCHER=%SCRIPT_DIR%run_monitor.bat
 (echo @echo off) > "%LAUNCHER%"
 (echo cd /d "%SCRIPT_DIR%") >> "%LAUNCHER%"
-(echo "!PYTHON_PATH!" "%MAIN_SCRIPT%") >> "%LAUNCHER%"
+(echo start "" "!PYTHON_PATH!" "%MAIN_SCRIPT%") >> "%LAUNCHER%"
 echo       run_monitor.bat 已生成
 
 :: =========================================================

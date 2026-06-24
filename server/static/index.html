@@ -118,6 +118,7 @@ tr:hover td { background: #1c2128; }
 .price-up { color: #f85149; }
 .price-flat { color: #8b949e; }
 .tag-new { color: #58a6ff; font-size: 12px; }
+.tag-stopped { color: #f0883e; font-size: 12px; }
 
 /* 排序箭头 */
 .sort-header {
@@ -723,7 +724,10 @@ function renderFlightTable() {
         return sortDirection === "asc" ? va - vb : vb - va;
       case "arrival_time":
         va = parseTimeToMinutes(a.arrival_time);
+        // 如果到达时刻早于出发时刻，说明是次日到达
+        if (va < parseTimeToMinutes(a.departure_time)) va += 1440;
         vb = parseTimeToMinutes(b.arrival_time);
+        if (vb < parseTimeToMinutes(b.departure_time)) vb += 1440;
         return sortDirection === "asc" ? va - vb : vb - va;
       case "departure_airport":
         va = (a.departure_airport || "").toLowerCase();
@@ -738,9 +742,12 @@ function renderFlightTable() {
         vb = b.price || 0;
         return sortDirection === "asc" ? va - vb : vb - va;
       case "change_amount":
-        // null 视为 0，排在最后
-        va = a.last_price === null ? (sortDirection === "asc" ? Infinity : -Infinity) : (a.change_amount || 0);
-        vb = b.last_price === null ? (sortDirection === "asc" ? Infinity : -Infinity) : (b.change_amount || 0);
+        // 停止更新始终排最后，新航班次之，然后按变动金额排序
+        const getChangePriority = (f) => f.is_stopped ? 2 : (f.last_price === null ? 1 : 0);
+        const pa = getChangePriority(a), pb = getChangePriority(b);
+        if (pa !== pb) return pa - pb;
+        va = a.change_amount || 0;
+        vb = b.change_amount || 0;
         return sortDirection === "asc" ? va - vb : vb - va;
       default:
         return 0;
@@ -776,6 +783,8 @@ function renderFlightTable() {
     let changeHtml = "";
     if (f.last_price === null) {
       changeHtml = '<span class="tag-new">🆕 新航班</span>';
+    } else if (f.is_stopped) {
+      changeHtml = '<span class="tag-stopped">⏸ 停止更新</span>';
     } else if (f.change_amount > 0) {
       changeHtml = `<span class="price-up">📈 +${f.change_amount}元 (+${f.change_percent}%)</span>`;
     } else if (f.change_amount < 0) {

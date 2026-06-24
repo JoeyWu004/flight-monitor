@@ -252,6 +252,8 @@ def format_alert_summary_message(alert_summary, run_time):
             # 变动标记
             if f['last_price'] is None:
                 tag = "🆕 新航班"
+            elif f.get('is_stopped'):
+                tag = "⏸ 停止更新"
             elif f['change_amount'] > 0:
                 tag = f"📈 +{f['change_amount']}元 +{f['change_percent']}%"
             elif f['change_amount'] < 0:
@@ -821,6 +823,8 @@ def monitor_all_routes(debug=False):
                     change_info['change_amount'] = 0
                     change_info['change_percent'] = 0
                     change_info['time_ago'] = None  # 新航班
+                # 当前批次刚爬到的航班，不可能是停止更新
+                change_info['is_stopped'] = False
                 alert_summary.setdefault(key, []).append(change_info)
 
         all_flights[key] = flights

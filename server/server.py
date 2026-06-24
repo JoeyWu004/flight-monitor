@@ -8,6 +8,7 @@ Flight-Monitor Server — FastAPI 数据看板后端
 import hashlib
 import json
 import os
+import re
 import sqlite3
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -181,6 +182,34 @@ async def get_dates(request: Request, frm: str = "", to: str = ""):
         conn.close()
 
 
+def _is_flight_stopped(flight_date, crawl_time, global_max_crawl_time, last_price_is_none):
+    """判断航班是否已停止更新
+
+    满足任一条件即为停止：
+    1. 航班日期已过（已起飞，不会再有新爬取数据）
+    2. 同日其他航班被最新批次爬到了，但这个航班没出现（取消/下架）
+    """
+    if last_price_is_none:
+        return False  # 新航班不可能是停止更新
+    try:
+        # 条件1: 航班日期已过
+        if flight_date:
+            flight_dt = datetime.strptime(flight_date, '%Y-%m-%d')
+            if flight_dt.date() < datetime.now().date():
+                return True
+    except ValueError:
+        pass
+    # 条件2: 最新一批爬取未覆盖该航班
+    if crawl_time and global_max_crawl_time:
+        try:
+            ct = datetime.strptime(crawl_time, '%Y-%m-%d %H:%M:%S')
+            max_ct = datetime.strptime(global_max_crawl_time, '%Y-%m-%d %H:%M:%S')
+            return (max_ct - ct).total_seconds() > 300
+        except ValueError:
+            pass
+    return False
+
+
 @app.get("/api/flights")
 async def get_flights(request: Request, frm: str = "", to: str = "", date: str = ""):
     """获取某航线+日期的最新航班列表（含涨跌信息）"""
@@ -189,6 +218,14 @@ async def get_flights(request: Request, frm: str = "", to: str = "", date: str =
 
     conn = get_db()
     try:
+        # 全局最新爬取时间（用于判断哪些航班已停止更新）
+        global_max = conn.execute("""
+            SELECT MAX(crawl_time) AS max_time
+            FROM flight_prices
+            WHERE route_from = ? AND route_to = ? AND flight_date = ?
+        """, (frm, to, date)).fetchone()
+        global_max_crawl = global_max["max_time"] if global_max else None
+
         # 每个航班号取最新一次抓取记录
         rows = conn.execute("""
             SELECT f.*
@@ -250,6 +287,10 @@ async def get_flights(request: Request, frm: str = "", to: str = "", date: str =
                 flight["change_percent"] = 0
                 flight["time_ago"] = None
 
+            flight["is_stopped"] = _is_flight_stopped(
+                r["flight_date"], r["crawl_time"], global_max_crawl,
+                flight["last_price"] is None
+            )
             flights.append(flight)
 
         return {"flights": flights}
@@ -362,6 +403,14 @@ async def get_multi_flights(
     result = []
     try:
         for dest in dests:
+            # 该目的地全局最新爬取时间
+            global_max = conn.execute("""
+                SELECT MAX(crawl_time) AS max_time
+                FROM flight_prices
+                WHERE route_from = ? AND route_to = ? AND flight_date = ?
+            """, (frm, dest, date)).fetchone()
+            global_max_crawl = global_max["max_time"] if global_max else None
+
             flights = conn.execute("""
                 SELECT f.*
                 FROM flight_prices f
@@ -417,6 +466,10 @@ async def get_multi_flights(
                     flight["change_amount"] = 0
                     flight["change_percent"] = 0
                     flight["time_ago"] = None
+                flight["is_stopped"] = _is_flight_stopped(
+                    r["flight_date"], r["crawl_time"], global_max_crawl,
+                    flight["last_price"] is None
+                )
                 result.append(flight)
 
         return {"flights": result}

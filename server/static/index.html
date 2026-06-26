@@ -994,12 +994,22 @@ function renderMultiChart(trends) {
     }
     prevDay = day;
   });
-  if (dayBreaks.length && series.length) {
-    series[0].markLine = {
-      silent: true, symbol: "none",
-      lineStyle: { color: "#30363d", type: "dashed", width: 1 },
-      data: dayBreaks,
-    };
+  // 日期分隔标记加在一条不可见的 dummy series 上，不参与 legend 切换，永不被隐藏
+  if (dayBreaks.length) {
+    series.push({
+      name: "__date_marks__",
+      type: "line",
+      data: [],
+      symbol: "none",
+      lineStyle: { opacity: 0 },
+      itemStyle: { opacity: 0 },
+      legendHoverLink: false,
+      markLine: {
+        silent: true, symbol: "none",
+        lineStyle: { color: "#30363d", type: "dashed", width: 1 },
+        data: dayBreaks,
+      },
+    });
   }
 
   const option = {
@@ -1082,7 +1092,7 @@ function renderMultiChart(trends) {
     series: series,
   };
 
-  chartSeriesNames = series.map(s => s.name);
+  chartSeriesNames = series.filter(s => s.name !== "__date_marks__").map(s => s.name);
   chartTotalFlights = flightList.length;
   chartInstance.setOption(option, true);
   hoveredSeries = null;

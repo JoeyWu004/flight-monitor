@@ -1232,6 +1232,19 @@ if (token) {
   }).catch(() => {
     doLogout();
   });
+} else {
+  // 无 token：探测是否为本地免鉴权模式
+  fetch("/api/routes").then(resp => {
+    if (resp.ok) return resp.json();
+    throw new Error("auth required");
+  }).then(data => {
+    // 本地模式，无需登录
+    username = "本地";
+    routes = data.routes;
+    showApp();
+  }).catch(() => {
+    // 需要登录，保持登录页显示
+  });
 }
 
 // ============================================================

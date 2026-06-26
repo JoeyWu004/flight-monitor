@@ -88,9 +88,17 @@ def verify_token(token: str) -> Optional[str]:
 #  认证中间件
 # ============================================================
 
+NO_AUTH = os.environ.get("NO_AUTH", "").lower() in ("1", "true", "yes")
+
 @app.middleware("http")
 async def auth_middleware(request: Request, call_next):
-    """JWT 鉴权中间件：/api/* 路由（除 /api/login）需要 Bearer token"""
+    """JWT 鉴权中间件：/api/* 路由（除 /api/login）需要 Bearer token
+    设置环境变量 NO_AUTH=1 可跳过鉴权（用于本地看板）"""
+    # 本地模式跳过鉴权
+    if NO_AUTH:
+        request.state.username = "local"
+        return await call_next(request)
+
     path = request.url.path
 
     # 放过静态文件和登录接口

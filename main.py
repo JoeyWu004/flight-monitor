@@ -807,17 +807,8 @@ def monitor_all_routes(debug=False):
                         change_info['time_ago'] = f"{delta.seconds // 60}分钟前"
                     else:
                         change_info['time_ago'] = "刚刚"
-                    # 价格变动时调用 AI 趋势预测
-                    if last['price'] != flight['price']:
-                        trend = predictor.predict_trend({
-                            **change_info,
-                            'route_from': route['from'],
-                            'route_to': route['to'],
-                            'old_price': last['price'],
-                            'new_price': flight['price'],
-                        })
-                        if trend:
-                            change_info['ai_trend'] = trend
+                    # 不在摘要阶段调 DS，避免微小变动或无 alarm 时烧 token
+                    # 真正的 alarm 已在 line 777 完成 AI 分析，摘要只需展示价格变动标记
                 else:
                     change_info['last_price'] = None
                     change_info['change_amount'] = 0
@@ -844,8 +835,8 @@ def monitor_all_routes(debug=False):
                 _process_route(route, date_str, is_priority=True)
                 random_delay()
 
-            # 优先项全部爬完 → 立即推送，不等剩余航线
-            if alert_summary:
+            # 优先项全部爬完 → 仅当有实际告警时才推送，避免无告警时烧飞书消息
+            if alert_summary and alerts:
                 push_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                 msg = format_alert_summary_message(alert_summary, push_time)
                 print(f"\n   {'─'*50}")
@@ -917,7 +908,7 @@ def run_once(debug=False):
 
     # 告警航线+日期：推送完整航班报告（全部航班+变动信息）
     # 注意：阶段1已推送过优先项则跳过，避免重复推送
-    if result.get('alert_summary') and not result.get('pushed_summary_keys'):
+    if result.get('alert_summary') and result.get('alerts') and not result.get('pushed_summary_keys'):
         msg = format_alert_summary_message(result['alert_summary'], run_time)
         if config.CONSOLE_OUTPUT:
             print(f"\n{msg}")

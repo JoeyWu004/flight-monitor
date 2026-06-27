@@ -747,11 +747,11 @@ def monitor_all_routes(debug=False):
                 'price': flight['price'],
             }, crawl_time=batch_crawl_time)
 
-            # 检测价格变动（航线+日期双过滤，空列表=不过滤）
-            if flight['flight_no'] and last and last['price'] != flight['price']:
+            # 检测价格变动（ALARM 为空时不产生任何告警）
+            if flight['flight_no'] and last and last['price'] != flight['price'] and config.ALARM:
                 route_key = (route['from'], route['to'])
-                route_ok = (not config.ALARM or route_key in config.ALARM)
-                date_ok = (not config.ALARM or date_str in config.ALARM.get(route_key, []))
+                route_ok = (route_key in config.ALARM)
+                date_ok = (date_str in config.ALARM.get(route_key, []))
                 if route_ok and date_ok and should_alert(last['price'], flight['price']):
                     alert_info = database.insert_alert(
                         flight['flight_no'],
@@ -972,8 +972,7 @@ def run_scheduled():
         for r, dates in config.ALARM.items():
             print(f"      {r[0]}→{r[1]}: {', '.join(sorted(dates))}")
     else:
-        print(f"   告警航线: 全部（{len(config.ROUTES)}条）")
-        print(f"   告警日期: 全部（{len(monitor_dates)}天）")
+        print(f"   告警航线: 无（不推送飞书、不调用DS）")
 
     if config.FEISHU_WEBHOOK:
         print(f"   飞书推送: ✅ 已配置")

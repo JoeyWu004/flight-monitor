@@ -1298,24 +1298,26 @@ async function sendChat() {
   // 构建页面上下文（含真实航班数据）
   const fromSel = document.getElementById("select-from");
   const fromName = fromSel.options[fromSel.selectedIndex]?.textContent || "";
+  const fromCode = fromSel.value;
   const destChecks = document.querySelectorAll("#dest-checkboxes input[type=checkbox]:checked");
   const destNames = Array.from(destChecks).map(cb => {
     const label = cb.parentElement;
     return label ? label.textContent.trim() : cb.value;
   });
+  const destCodes = Array.from(destChecks).map(cb => cb.value);
   const dateSel = document.getElementById("select-date");
   const dateText = dateSel.options[dateSel.selectedIndex]?.textContent || "";
   const ctxParts = [];
   if (fromName) ctxParts.push("出发城市=" + fromName);
   if (destNames.length) ctxParts.push("到达城市=" + destNames.join("、"));
-  if (dateText) ctxParts.push("航班日期=" + dateText);
+  if (dateText) ctxParts.push("当前查看日期=" + dateText);
 
-  // 附上真实航班列表
+  // 附上真实航班列表（当天）
   if (currentFlights.length) {
     const flightInfo = currentFlights.map(f =>
       `[${f.airline} ${f.flight_no}] ${f.departure_time}→${f.arrival_time} ${f.departure_airport} 目的地${f.route_to_name||f.route_to} ¥${f.price}`
     ).join("\n");
-    ctxParts.push("当前航班列表（共" + currentFlights.length + "个）：\n" + flightInfo);
+    ctxParts.push("【" + dateText + "航班列表】（共" + currentFlights.length + "个）：\n" + flightInfo);
   }
   // 附上趋势数据摘要（每个航班最近几天的价格）
   if (Object.keys(currentTrends).length) {
@@ -1332,7 +1334,44 @@ async function sendChat() {
     }
     if (trendLines.length) ctxParts.push("价格趋势摘要：\n" + trendLines.join("\n"));
   }
-  const pageCtx = ctxParts.length ? "\n【当前页面真实数据，请据此回答不要编造】" + ctxParts.join("\n") : "";
+
+  // 多日期 AI 摘要（跨日期对比分析）
+  if (fromCode && destCodes.length) {
+    try {
+      const summaryResp = await fetch(
+        `/api/ai-summary?frm=${encodeURIComponent(fromCode)}&to=${encodeURIComponent(destCodes.join(","))}&days=30`,
+        { headers: { "Authorization": "Bearer " + token } }
+      );
+      if (summaryResp.ok) {
+        const summary = await summaryResp.json();
+        if (summary.total_dates > 0) {
+          const summaryLines = [];
+          summaryLines.push("数据范围: " + summary.date_range + "，共" + summary.total_dates + "天，覆盖" + summary.total_flights_tracked + "个航班");
+          summaryLines.push("整体价格走势: " + summary.trend_direction);
+          if (summary.best_deal) {
+            summaryLines.push("最佳入手日期: " + summary.best_deal.date + "（日均¥" + summary.best_deal.avg_price + "，最低¥" + summary.best_deal.min_price + "，共" + summary.best_deal.flight_count + "个航班）");
+          }
+          // 日均价序列
+          const dates = Object.keys(summary.daily_stats).sort();
+          const avgSeq = dates.map(d => d + "=¥" + summary.daily_stats[d].avg).join(", ");
+          summaryLines.push("每日均价序列:\n" + avgSeq);
+          // 波动最大的几个航班
+          if (summary.flight_details && summary.flight_details.length) {
+            const topVolatile = summary.flight_details.slice(0, 5);
+            const volLines = topVolatile.map(f =>
+              `${f.airline} ${f.flight_no}(往${f.route_to}): ¥${f.min_price}~¥${f.max_price} 均价¥${f.avg_price} 当前¥${f.current_price}`
+            );
+            summaryLines.push("价格波动最大的航班:\n" + volLines.join("\n"));
+          }
+          ctxParts.push("【跨日期数据摘要，请据此分析多日趋势】\n" + summaryLines.join("\n"));
+        }
+      }
+    } catch (e) {
+      // 静默失败，不影响聊天
+    }
+  }
+
+  const pageCtx = ctxParts.length ? "\n【当前页面真实数据，请据此回答不要编造】\n" + ctxParts.join("\n\n") : "";
 
   const loadingDiv = addChatMsg("ai", "思考中...");
   loadingDiv.classList.add("loading");

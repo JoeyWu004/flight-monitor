@@ -10,7 +10,7 @@ import json
 import os
 import re
 import sqlite3
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 from pathlib import Path
 from typing import List, Optional
 
@@ -388,6 +388,166 @@ async def get_trends(
                 }
 
         return {"trends": result}
+    finally:
+        conn.close()
+
+
+@app.get("/api/ai-summary")
+async def ai_summary(
+    request: Request,
+    frm: str = "",
+    to: str = "",
+    days: int = 30,
+):
+    """AI 助手多日期数据摘要。返回指定航线在过去 N 天内的价格统计数据。
+
+    对每个 flight_date，取该日期所有航班最新一次爬取的价格做统计。
+    返回:
+      - daily_stats: 每天的均价/最低/最高/航班数
+      - trend_direction: 整体走势（涨/跌/平稳/波动）
+      - route_info: 航线信息
+      - best_deal: 当前最划算的日期推荐
+    """
+    if not frm or not to:
+        return JSONResponse({"detail": "缺少 frm 或 to 参数"}, status_code=400)
+
+    dests = [d.strip() for d in to.split(",") if d.strip()]
+    if not dests:
+        return JSONResponse({"detail": "缺少有效的 to 参数"}, status_code=400)
+
+    today = date.today()
+    date_end = (today + timedelta(days=days)).isoformat()
+    date_start = today.isoformat()
+
+    conn = get_db()
+    try:
+        placeholders = ",".join(["?" for _ in dests])
+        # 取每个 (route_from, route_to, flight_date, flight_no) 最新 crawl 的价格
+        rows = conn.execute(f"""
+            SELECT f.route_from, f.route_to, f.route_to_name,
+                   f.flight_date, f.flight_no, f.airline,
+                   f.price, f.departure_time, f.arrival_time
+            FROM flight_prices f
+            INNER JOIN (
+                SELECT route_from, route_to, flight_date, flight_no,
+                       MAX(crawl_time) AS max_time
+                FROM flight_prices
+                WHERE route_from = ?
+                  AND route_to IN ({placeholders})
+                  AND flight_date >= ? AND flight_date <= ?
+                GROUP BY route_from, route_to, flight_date, flight_no
+            ) latest
+              ON f.route_from = latest.route_from
+             AND f.route_to = latest.route_to
+             AND f.flight_date = latest.flight_date
+             AND f.flight_no = latest.flight_no
+             AND f.crawl_time = latest.max_time
+            ORDER BY f.flight_date, f.route_to, f.price
+        """, (frm, *dests, date_start, date_end)).fetchall()
+
+        if not rows:
+            return {
+                "routes": [{"from": frm, "to": d} for d in dests],
+                "date_range": f"{date_start} ~ {date_end}",
+                "daily_stats": {},
+                "trend_direction": "暂无数据",
+                "best_deal": None,
+                "note": "指定范围内无航班数据",
+            }
+
+        # 按日期聚合统计
+        daily = {}  # date -> [prices]
+        flight_series = {}  # (flight_no, route_to) -> {date: price}
+        route_set = set()
+
+        for r in rows:
+            d = r["flight_date"]
+            p = r["price"]
+            route_set.add((r["route_from"], r["route_to"], r["route_to_name"] or r["route_to"]))
+
+            if d not in daily:
+                daily[d] = []
+            daily[d].append(p)
+
+            key = (r["flight_no"], r["route_to"])
+            if key not in flight_series:
+                flight_series[key] = {}
+            flight_series[key][d] = {
+                "price": p,
+                "airline": r["airline"] or "",
+                "departure_time": r["departure_time"] or "",
+                "arrival_time": r["arrival_time"] or "",
+            }
+
+        # 构建 daily_stats
+        daily_stats = {}
+        sorted_dates = sorted(daily.keys())
+        for d in sorted_dates:
+            prices = daily[d]
+            daily_stats[d] = {
+                "avg": round(sum(prices) / len(prices)),
+                "min": min(prices),
+                "max": max(prices),
+                "count": len(prices),
+            }
+
+        # 走势判断（用最后 7 天 vs 前段对比）
+        trend_direction = "平稳"
+        if len(sorted_dates) >= 4:
+            mid = len(sorted_dates) // 2
+            first_half_avg = sum(daily_stats[d]["avg"] for d in sorted_dates[:mid]) / mid
+            second_half_avg = sum(daily_stats[d]["avg"] for d in sorted_dates[mid:]) / (len(sorted_dates) - mid)
+            change_pct = (second_half_avg - first_half_avg) / first_half_avg * 100 if first_half_avg else 0
+
+            if change_pct > 5:
+                trend_direction = "上涨"
+            elif change_pct < -5:
+                trend_direction = "下跌"
+            elif abs(change_pct) > 2:
+                trend_direction = "小幅" + ("上涨" if change_pct > 0 else "下跌")
+            else:
+                trend_direction = "平稳"
+
+        # 最佳入手推荐：日均价最低的日期
+        best_date = min(daily_stats, key=lambda d: daily_stats[d]["avg"])
+        best_info = daily_stats[best_date]
+
+        # 构建航班明细（只选价格波动明显的，避免数据过长）
+        flight_details = []
+        for (fn, rt), date_prices in flight_series.items():
+            if len(date_prices) >= 2:
+                price_values = [v["price"] for v in date_prices.values()]
+                flight_details.append({
+                    "flight_no": fn,
+                    "route_to": rt,
+                    "airline": date_prices[next(iter(date_prices))]["airline"],
+                    "departure_time": date_prices[next(iter(date_prices))]["departure_time"],
+                    "current_price": price_values[-1] if price_values else None,
+                    "avg_price": round(sum(price_values) / len(price_values)),
+                    "min_price": min(price_values),
+                    "max_price": max(price_values),
+                    "dates_with_data": sorted(date_prices.keys()),
+                })
+
+        # 按价格波动幅度排序
+        flight_details.sort(key=lambda f: f["max_price"] - f["min_price"], reverse=True)
+
+        return {
+            "routes": [{"from": frm, "to": name} for _, code, name in sorted(route_set, key=lambda x: x[1])],
+            "date_range": f"{sorted_dates[0]} ~ {sorted_dates[-1]}" if sorted_dates else f"{date_start} ~ {date_end}",
+            "daily_stats": daily_stats,
+            "trend_direction": trend_direction,
+            "best_deal": {
+                "date": best_date,
+                "avg_price": best_info["avg"],
+                "min_price": best_info["min"],
+                "flight_count": best_info["count"],
+            },
+            "flight_details": flight_details[:30],  # 最多 30 个航班
+            "total_dates": len(daily_stats),
+            "total_flights_tracked": len(flight_details),
+        }
+
     finally:
         conn.close()
 

@@ -95,8 +95,18 @@ body {
   background: #161b22; border: 1px solid #30363d;
   border-radius: 10px; padding: 16px 20px; margin-bottom: 16px;
 }
-.chart-section h2 { font-size: 15px; color: #f0f6fc; margin-bottom: 12px; }
+.chart-section h2 { font-size: 15px; color: #f0f6fc; margin-bottom: 12px; display: flex; align-items: center; gap: 8px; }
 #trend-chart { width: 100%; height: 440px; }
+
+/* 图表折叠 */
+.chart-section .toggle-btn {
+  background: none; border: none; color: #8b949e; font-size: 18px;
+  cursor: pointer; padding: 0 4px; transition: transform .2s, color .15s;
+  line-height: 1;
+}
+.chart-section .toggle-btn:hover { color: #f0f6fc; }
+.chart-section.collapsed .toggle-btn { transform: rotate(-90deg); }
+.chart-section.collapsed .chart-layout { display: none; }
 
 /* 表格区 */
 .table-section {
@@ -337,7 +347,7 @@ tr:hover td { background: #1c2128; }
 
     <!-- 趋势图 -->
     <div class="chart-section">
-      <h2>📈 价格趋势</h2>
+      <h2>📈 价格趋势 <button class="toggle-btn" onclick="toggleChart()" title="折叠/展开">▼</button></h2>
       <div class="chart-layout">
         <div id="custom-legend"></div>
         <div id="trend-chart">
@@ -348,7 +358,9 @@ tr:hover td { background: #1c2128; }
 
     <!-- 航班列表 -->
     <div class="table-section">
-      <h2>✈️ 航班列表 <span id="flight-count" style="color:#8b949e;font-weight:400"></span></h2>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px">
+        <h2 style="margin:0">✈️ 航班列表 <span id="flight-count" style="color:#8b949e;font-weight:400"></span></h2>
+      </div>
       <p id="table-tip" style="color:#8b949e;font-size:12px;margin-bottom:10px;display:none">💡 点击任意航班行即可在上方查看该航班的价格走势</p>
       <div id="flight-table-container">
         <div class="empty" id="table-empty">请选择航线和日期查看航班</div>
@@ -610,29 +622,29 @@ async function onDateChange() {
 }
 
 function goPrevDay() {
-  const sel = document.getElementById("select-date");
-  const idx = sel.selectedIndex;
+  const topSel = document.getElementById("select-date");
+  const idx = topSel.selectedIndex;
   if (idx > 1) {
-    sel.selectedIndex = idx - 1;
+    topSel.selectedIndex = idx - 1;
     onDateChange();
   }
 }
 
 function goNextDay() {
-  const sel = document.getElementById("select-date");
-  const idx = sel.selectedIndex;
-  if (idx < sel.options.length - 1) {
-    sel.selectedIndex = idx + 1;
+  const topSel = document.getElementById("select-date");
+  const idx = topSel.selectedIndex;
+  if (idx < topSel.options.length - 1) {
+    topSel.selectedIndex = idx + 1;
     onDateChange();
   }
 }
 
 function goToday() {
-  const sel = document.getElementById("select-date");
+  const topSel = document.getElementById("select-date");
   const today = new Date().toISOString().slice(0, 10);
-  for (let i = 0; i < sel.options.length; i++) {
-    if (sel.options[i].value === today) {
-      sel.selectedIndex = i;
+  for (let i = 0; i < topSel.options.length; i++) {
+    if (topSel.options[i].value === today) {
+      topSel.selectedIndex = i;
       onDateChange();
       return;
     }
@@ -718,6 +730,10 @@ function renderFlightTable() {
         va = (a.airline || "").toLowerCase();
         vb = (b.airline || "").toLowerCase();
         return sortDirection === "asc" ? va.localeCompare(vb) : vb.localeCompare(va);
+      case "aircraft_type":
+        va = (a.aircraft_type || "").toLowerCase();
+        vb = (b.aircraft_type || "").toLowerCase();
+        return sortDirection === "asc" ? va.localeCompare(vb) : vb.localeCompare(va);
       case "departure_time":
         va = parseTimeToMinutes(a.departure_time);
         vb = parseTimeToMinutes(b.departure_time);
@@ -770,6 +786,7 @@ function renderFlightTable() {
       <th>目的地</th>
       <th class="sort-header">航司${sortArrow("airline")}</th>
       <th>航班号</th>
+      <th class="sort-header">机型${sortArrow("aircraft_type")}</th>
       <th class="sort-header">出发${sortArrow("departure_time")}</th>
       <th class="sort-header">到达${sortArrow("arrival_time")}</th>
       <th class="sort-header">出发机场${sortArrow("departure_airport")}</th>
@@ -792,6 +809,10 @@ function renderFlightTable() {
     } else {
       changeHtml = '<span class="price-flat">➖ 未变动</span>';
     }
+    // 机型变动提醒
+    if (f.aircraft_type_change && f.aircraft_type_change.from && f.aircraft_type_change.to) {
+      changeHtml += `<br><span style="color:#ffaa00;font-size:11px">🔄 ${f.aircraft_type_change.from} → ${f.aircraft_type_change.to}</span>`;
+    }
 
     const destName = f.route_to_name || f.route_to || '';
     const destBadge = `<span style="display:inline-block;padding:1px 6px;border-radius:4px;font-size:11px;background:${getAirlineColor(f.airline)};color:#fff">${destName}</span>`;
@@ -806,6 +827,7 @@ function renderFlightTable() {
       <td>${destBadge}</td>
       <td>${f.airline}</td>
       <td style="color:#58a6ff;font-weight:500">${f.flight_no}</td>
+      <td style="font-size:12px;${isWidebody(f.aircraft_type) ? 'color:#ffaa00;font-weight:600' : 'color:#8b949e'}">${isWidebody(f.aircraft_type) ? '⭐' : ''}${f.aircraft_type || ''}</td>
       <td>${f.departure_time}</td>
       <td>${f.arrival_time}</td>
       <td>${f.departure_airport}</td>
@@ -824,6 +846,16 @@ function setSort(col, dir) {
   sortColumn = col;
   sortDirection = dir;
   renderFlightTable();
+}
+
+function isWidebody(aircraftType) {
+  if (!aircraftType) return false;
+  if (aircraftType.includes('(大)')) return true;
+  const widePatterns = [
+    /A33[0-9]/, /A34[0-9]/, /A35[0-9]/, /A38[0-9]/,
+    /B7[4-9]\d/, /B78[0-7]/, /747/, /767/, /777/, /787/
+  ];
+  return widePatterns.some(p => p.test(aircraftType));
 }
 
 // ============================================================
@@ -1221,6 +1253,15 @@ function toggleAllChartSelect(el) {
   onChartSelectChange();
 }
 
+function toggleChart() {
+  const section = document.querySelector(".chart-section");
+  section.classList.toggle("collapsed");
+  // 展开时重绘图表以适配新尺寸
+  if (!section.classList.contains("collapsed") && chartInstance) {
+    setTimeout(() => chartInstance.resize(), 100);
+  }
+}
+
 // ============================================================
 //  初始化
 // ============================================================
@@ -1315,7 +1356,7 @@ async function sendChat() {
   // 附上真实航班列表（当天）
   if (currentFlights.length) {
     const flightInfo = currentFlights.map(f =>
-      `[${f.airline} ${f.flight_no}] ${f.departure_time}→${f.arrival_time} ${f.departure_airport} 目的地${f.route_to_name||f.route_to} ¥${f.price}`
+      `[${f.airline} ${f.flight_no}]${f.aircraft_type ? ' ' + f.aircraft_type : ''} ${f.departure_time}→${f.arrival_time} ${f.departure_airport} 目的地${f.route_to_name||f.route_to} ¥${f.price}`
     ).join("\n");
     ctxParts.push("【" + dateText + "航班列表】（共" + currentFlights.length + "个）：\n" + flightInfo);
   }

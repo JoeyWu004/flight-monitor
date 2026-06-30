@@ -200,11 +200,16 @@ def format_alert_message(alerts, run_time):
                 f"   🔽 ¥{a['old_price']} → ¥{a['new_price']} "
                 f"({a['change_amount']:+d}元, {a['change_percent']:+.1f}%)"
             )
+            ac = f" ({a['aircraft_type']})" if a.get('aircraft_type') else ""
             lines.append(
-                f"      {a['airline']} {a['flight_no']} "
+                f"      {a['airline']} {a['flight_no']}{ac} "
                 f"{a['from_name']}→{a['to_name']} "
                 f"{a['flight_date']} {a['departure_time']}-{a['arrival_time']}"
             )
+            # 机型变动
+            tc = a.get('aircraft_type_change')
+            if tc:
+                lines.append(f"      🔄 机型变更: {tc['from']} → {tc['to']}")
             if a.get('ai_trend'):
                 lines.append(f"      {a['ai_trend']}")
 
@@ -263,18 +268,27 @@ def format_alert_summary_message(alert_summary, run_time):
 
             airport = _short_airport(f.get('departure_airport', ''))
 
+            # 大客机标记
+            wide_mark = " ⭐" if is_widebody(f.get('aircraft_type', '')) else ""
             # 第一行: 价格 航司 时间
             lines.append(
-                f"   ¥{f['price']:<5} {f['airline']} "
+                f"   ¥{f['price']:<5} {f['airline']}{wide_mark} "
                 f"{f['departure_time']}-{f['arrival_time']}"
             )
-            # 第二行: 航班号 航站楼
-            lines.append(f"         {f['flight_no']}  {airport}")
+            # 第二行: 航班号 航站楼 机型
+            parts = [f['flight_no'], airport]
+            if f.get('aircraft_type'):
+                parts.append(f.get('aircraft_type'))
+            lines.append("         " + "  ".join(parts))
             # 第三行: 价格变动
             if f['time_ago']:
                 lines.append(f"         {tag} · {f['time_ago']}")
             else:
                 lines.append(f"         {tag}")
+            # 机型变动
+            type_change = f.get('aircraft_type_change')
+            if type_change:
+                lines.append(f"         🔄 机型变更: {type_change['from']} → {type_change['to']}")
             # 第四行: AI 分析
             if f.get('ai_trend'):
                 lines.append(f"         {f['ai_trend']}")
@@ -284,6 +298,27 @@ def format_alert_summary_message(alert_summary, run_time):
     lines.append(f"\n{'=' * 20}")
     lines.append(f"📌 共 {len(alert_summary)} 条航线日期, {total_flights} 个航班")
     return "\n".join(lines)
+
+
+def is_widebody(aircraft_type):
+    """判断是否为宽体/大客机
+
+    携程 DOM 格式如 "空客330(大)"、"波音787(大)"，含 "(大)" 即为宽体。
+    同时用常见宽体机型号做兜底匹配。
+    """
+    if not aircraft_type:
+        return False
+    if '(大)' in aircraft_type:
+        return True
+    # 兜底：匹配宽体机型号
+    widebody_patterns = [
+        r'\bA33[0-9]\b', r'\bA34[0-9]\b', r'\bA35[0-9]\b', r'\bA38[0-9]\b',  # Airbus
+        r'\bB7[4-9]\d\b', r'\bB78[0-7]\b', r'\b747\b', r'\b767\b', r'\b777\b', r'\b787\b',  # Boeing
+    ]
+    for p in widebody_patterns:
+        if re.search(p, aircraft_type):
+            return True
+    return False
 
 
 # ============================================================
@@ -496,13 +531,19 @@ def parse_single_flight(flight_div):
         arrival_airport = arr_airport_el.text.strip() if arr_airport_el else ""
         arrival_time = arr_time_el.text.strip() if arr_time_el else ""
 
-        # 航班号 —— 携程新版 DOM 在 span.plane-No 中
+        # 航班号 —— 携程新版 DOM 在 span.plane-No 中，机型在嵌套 <span> 中
+        # DOM 示例: <span class="plane-No">ZH9187&nbsp;<span class="">空客320(中)</span></span>
         plane_no_el = flight_div.find("span", {"class": "plane-No"})
+        aircraft_type = ""
         if plane_no_el:
             plane_text = plane_no_el.text.strip()
             # 优先匹配航班号格式（如 "KN5967 Boeing..." → KN5967, "南航 CZ3112" → CZ3112）
             m = re.search(r'([A-Z0-9]{2}\d{2,4})', plane_text)
             flight_no = m.group(1) if m else plane_text.split()[0]
+            # 提取机型（嵌套 <span>，class 为空或不存在）
+            type_el = plane_no_el.find("span")
+            if type_el:
+                aircraft_type = type_el.text.strip()
         else:
             flight_no = ""
 
@@ -553,6 +594,7 @@ def parse_single_flight(flight_div):
         return {
             'airline': airline,
             'flight_no': flight_no,
+            'aircraft_type': aircraft_type,
             'departure_airport': departure_airport,
             'arrival_airport': arrival_airport,
             'departure_time': departure_time,
@@ -740,6 +782,7 @@ def monitor_all_routes(debug=False):
                 'flight_date': date_str,
                 'flight_no': flight['flight_no'],
                 'airline': flight['airline'],
+                'aircraft_type': flight.get('aircraft_type', ''),
                 'departure_airport': flight['departure_airport'],
                 'arrival_airport': flight['arrival_airport'],
                 'departure_time': flight['departure_time'],
@@ -748,6 +791,7 @@ def monitor_all_routes(debug=False):
             }, crawl_time=batch_crawl_time)
 
             # 检测价格变动（ALARM 为空时不产生任何告警）
+            _ai_trend = None
             if flight['flight_no'] and last and last['price'] != flight['price'] and config.ALARM:
                 route_key = (route['from'], route['to'])
                 route_ok = (route_key in config.ALARM)
@@ -777,6 +821,12 @@ def monitor_all_routes(debug=False):
                     trend = predictor.predict_trend(alert_entry)
                     if trend:
                         alert_entry['ai_trend'] = trend
+                        _ai_trend = trend
+                    # 机型变动检测
+                    prev_type = last.get('aircraft_type', '')
+                    curr_type = flight.get('aircraft_type', '')
+                    if prev_type and curr_type and prev_type != curr_type:
+                        alert_entry['aircraft_type_change'] = {'from': prev_type, 'to': curr_type}
                     alerts.append(alert_entry)
                     stats['alerts_generated'] += 1
 
@@ -807,8 +857,14 @@ def monitor_all_routes(debug=False):
                         change_info['time_ago'] = f"{delta.seconds // 60}分钟前"
                     else:
                         change_info['time_ago'] = "刚刚"
-                    # 不在摘要阶段调 DS，避免微小变动或无 alarm 时烧 token
-                    # 真正的 alarm 已在 line 777 完成 AI 分析，摘要只需展示价格变动标记
+                    # AI 分析结果从上方告警块继承
+                    if _ai_trend:
+                        change_info['ai_trend'] = _ai_trend
+                    # 机型变动检测
+                    prev_type = last.get('aircraft_type', '')
+                    curr_type = flight.get('aircraft_type', '')
+                    if prev_type and curr_type and prev_type != curr_type:
+                        change_info['aircraft_type_change'] = {'from': prev_type, 'to': curr_type}
                 else:
                     change_info['last_price'] = None
                     change_info['change_amount'] = 0

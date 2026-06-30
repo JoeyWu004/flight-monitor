@@ -129,6 +129,7 @@ def _build_prompt(flight_info, history, days_until):
 - 航线: {flight_info.get('from_name', '')} → {flight_info.get('to_name', '')}
 - 航班号: {flight_info['flight_no']}
 - 航空公司: {flight_info.get('airline', '')}
+- 机型: {flight_info.get('aircraft_type', '')}
 - 出发日期: {flight_info['flight_date']}
 - 起飞/落地: {flight_info.get('departure_time', '')} - {flight_info.get('arrival_time', '')}
 - 当前价格: ¥{current_price}

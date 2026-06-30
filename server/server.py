@@ -250,9 +250,9 @@ async def get_flights(request: Request, frm: str = "", to: str = "", date: str =
 
         flights = []
         for r in rows:
-            # 查上一次价格
+            # 查上一次价格（含机型，用于检测变动）
             prev = conn.execute("""
-                SELECT price, crawl_time FROM flight_prices
+                SELECT price, crawl_time, aircraft_type FROM flight_prices
                 WHERE flight_no = ? AND route_from = ? AND route_to = ?
                   AND flight_date = ? AND crawl_time < ?
                 ORDER BY crawl_time DESC LIMIT 1
@@ -261,6 +261,7 @@ async def get_flights(request: Request, frm: str = "", to: str = "", date: str =
             flight = {
                 "flight_no": r["flight_no"],
                 "airline": r["airline"] or "",
+                "aircraft_type": r["aircraft_type"] or "",
                 "departure_airport": r["departure_airport"] or "",
                 "arrival_airport": r["arrival_airport"] or "",
                 "departure_time": r["departure_time"] or "",
@@ -270,6 +271,19 @@ async def get_flights(request: Request, frm: str = "", to: str = "", date: str =
             }
 
             if prev:
+                flight["last_price"] = prev["price"]
+                flight["change_amount"] = r["price"] - prev["price"]
+                if prev["price"] > 0:
+                    flight["change_percent"] = round(
+                        (r["price"] - prev["price"]) / prev["price"] * 100, 1
+                    )
+                else:
+                    flight["change_percent"] = 0
+                # 机型变动检测
+                prev_type = (prev["aircraft_type"] or "").strip()
+                curr_type = (r["aircraft_type"] or "").strip()
+                if prev_type and curr_type and prev_type != curr_type:
+                    flight["aircraft_type_change"] = {"from": prev_type, "to": curr_type}
                 flight["last_price"] = prev["price"]
                 flight["change_amount"] = r["price"] - prev["price"]
                 if prev["price"] > 0:
@@ -379,6 +393,7 @@ async def get_trends(
                 result[key] = {
                     "airline": fl["airline"] or "",
                     "flight_no": fl["flight_no"],
+                    "aircraft_type": fl["aircraft_type"] or "",
                     "price": fl["price"],
                     "route_to": dest,
                     "route_to_name": fl["route_to_name"] or dest,
@@ -426,7 +441,7 @@ async def ai_summary(
         rows = conn.execute(f"""
             SELECT f.route_from, f.route_to, f.route_to_name,
                    f.flight_date, f.flight_no, f.airline,
-                   f.price, f.departure_time, f.arrival_time
+                   f.aircraft_type, f.price, f.departure_time, f.arrival_time
             FROM flight_prices f
             INNER JOIN (
                 SELECT route_from, route_to, flight_date, flight_no,
@@ -475,6 +490,7 @@ async def ai_summary(
             flight_series[key][d] = {
                 "price": p,
                 "airline": r["airline"] or "",
+                "aircraft_type": r["aircraft_type"] or "",
                 "departure_time": r["departure_time"] or "",
                 "arrival_time": r["arrival_time"] or "",
             }
@@ -521,6 +537,7 @@ async def ai_summary(
                     "flight_no": fn,
                     "route_to": rt,
                     "airline": date_prices[next(iter(date_prices))]["airline"],
+                    "aircraft_type": date_prices[next(iter(date_prices))]["aircraft_type"],
                     "departure_time": date_prices[next(iter(date_prices))]["departure_time"],
                     "current_price": price_values[-1] if price_values else None,
                     "avg_price": round(sum(price_values) / len(price_values)),
@@ -594,7 +611,7 @@ async def get_multi_flights(
 
             for r in flights:
                 prev = conn.execute("""
-                    SELECT price, crawl_time FROM flight_prices
+                    SELECT price, crawl_time, aircraft_type FROM flight_prices
                     WHERE flight_no = ? AND route_from = ? AND route_to = ?
                       AND flight_date = ? AND crawl_time < ?
                     ORDER BY crawl_time DESC LIMIT 1
@@ -603,6 +620,7 @@ async def get_multi_flights(
                 flight = {
                     "flight_no": r["flight_no"],
                     "airline": r["airline"] or "",
+                    "aircraft_type": r["aircraft_type"] or "",
                     "departure_airport": r["departure_airport"] or "",
                     "arrival_airport": r["arrival_airport"] or "",
                     "departure_time": r["departure_time"] or "",
@@ -619,6 +637,11 @@ async def get_multi_flights(
                         flight["change_percent"] = round((r["price"] - prev["price"]) / prev["price"] * 100, 1)
                     else:
                         flight["change_percent"] = 0
+                    # 机型变动检测
+                    prev_type = (prev["aircraft_type"] or "").strip()
+                    curr_type = (r["aircraft_type"] or "").strip()
+                    if prev_type and curr_type and prev_type != curr_type:
+                        flight["aircraft_type_change"] = {"from": prev_type, "to": curr_type}
                     last_time = datetime.strptime(prev["crawl_time"], "%Y-%m-%d %H:%M:%S")
                     delta = datetime.now() - last_time
                     if delta.days > 0:

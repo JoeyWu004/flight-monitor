@@ -38,6 +38,7 @@ def init_db():
             flight_date TEXT NOT NULL,
             flight_no TEXT NOT NULL,
             airline TEXT,
+            aircraft_type TEXT,
             departure_airport TEXT,
             arrival_airport TEXT,
             departure_time TEXT,
@@ -46,6 +47,12 @@ def init_db():
             crawl_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
+
+    # 兼容旧库：添加机型字段（如列不存在则新增）
+    try:
+        cursor.execute("ALTER TABLE flight_prices ADD COLUMN aircraft_type TEXT")
+    except Exception:
+        pass  # 列已存在，跳过
 
     # 价格变动告警记录表
     cursor.execute("""
@@ -109,10 +116,10 @@ def insert_price(record, crawl_time=None):
     cursor.execute("""
         INSERT INTO flight_prices
             (route_from, route_to, route_from_name, route_to_name,
-             flight_date, flight_no, airline,
+             flight_date, flight_no, airline, aircraft_type,
              departure_airport, arrival_airport,
              departure_time, arrival_time, price, crawl_time)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
         record['route_from'],
         record['route_to'],
@@ -121,6 +128,7 @@ def insert_price(record, crawl_time=None):
         record['flight_date'],
         record['flight_no'],
         record.get('airline', ''),
+        record.get('aircraft_type', ''),
         record.get('departure_airport', ''),
         record.get('arrival_airport', ''),
         record.get('departure_time', ''),
@@ -137,7 +145,7 @@ def get_last_price(flight_no, route_from, route_to, flight_date):
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("""
-        SELECT price, crawl_time FROM flight_prices
+        SELECT price, crawl_time, aircraft_type FROM flight_prices
         WHERE flight_no = ? AND route_from = ? AND route_to = ? AND flight_date = ?
         ORDER BY crawl_time DESC
         LIMIT 1
@@ -145,7 +153,7 @@ def get_last_price(flight_no, route_from, route_to, flight_date):
     row = cursor.fetchone()
     conn.close()
     if row:
-        return {'price': row['price'], 'crawl_time': row['crawl_time']}
+        return {'price': row['price'], 'crawl_time': row['crawl_time'], 'aircraft_type': row['aircraft_type'] or ''}
     return None
 
 

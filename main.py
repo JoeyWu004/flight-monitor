@@ -87,14 +87,61 @@ def show_windows_toast(title, message, is_error=False):
         pass  # 任何异常都不影响监控主流程
 
 
+def _set_sleep_state(prevent):
+    """设置系统休眠状态（Windows only）
+
+    prevent=True:  阻止空闲休眠（爬取期间调用）
+    prevent=False: 恢复允许休眠（爬取完成后调用）
+    """
+    if sys.platform != 'win32':
+        return
+    try:
+        import ctypes
+        ES_CONTINUOUS = 0x80000000
+        ES_SYSTEM_REQUIRED = 0x00000001
+        if prevent:
+            ctypes.windll.kernel32.SetThreadExecutionState(
+                ES_CONTINUOUS | ES_SYSTEM_REQUIRED)
+        else:
+            ctypes.windll.kernel32.SetThreadExecutionState(ES_CONTINUOUS)
+    except Exception:
+        pass
+
+
+def wait_for_network():
+    """阻塞等待网络可用（笔记本开机后 Wi-Fi 可能尚未连接）
+
+    每 NETWORK_CHECK_INTERVAL 秒检测一次，直到连通后才返回。
+    防止刚开机时无网络导致整轮航线全部爬取失败。
+    """
+    import socket
+    attempt = 0
+    while True:
+        attempt += 1
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(5)
+            sock.connect(('www.baidu.com', 80))
+            sock.close()
+            if attempt > 1:
+                print(f"   ✅ 网络已恢复（第 {attempt} 次检测）")
+            return True
+        except Exception:
+            if attempt == 1:
+                print(f"   ⚠️ 网络不可用，等待连接...")
+            print(f"      🔍 第 {attempt} 次检测失败，{config.NETWORK_CHECK_INTERVAL}秒后重试...")
+            sleep(config.NETWORK_CHECK_INTERVAL)
+
+
 def get_monitor_dates():
     """获取监控日期列表：常规日期（今天起共 MONITOR_DAYS_AHEAD 天）+ 告警日期，去重排序"""
     today = datetime.now()
+    today_str = today.strftime('%Y-%m-%d')
     dates = [(today + timedelta(days=i)).strftime('%Y-%m-%d')
              for i in range(config.MONITOR_DAYS_AHEAD)]
-    # 告警日期始终纳入监控范围
+    # 告警日期纳入监控范围（只保留今天及之后的，过去的日期自动过滤）
     for d in {d for dates in config.ALARM.values() for d in dates}:
-        if d not in dates:
+        if d >= today_str and d not in dates:
             dates.append(d)
     dates.sort()
     return dates
@@ -718,6 +765,7 @@ def monitor_all_routes(debug=False):
     # ---- 内部函数：处理单条航线+日期 ----
     def _process_route(route, date_str, is_priority):
         """爬取、解析、存储、比价一条航线+日期组合，支持空结果重试"""
+        nonlocal shared_page
         stats['routes_checked'] += 1
         key = (route['from_name'], route['to_name'], date_str)
 
@@ -736,9 +784,22 @@ def monitor_all_routes(debug=False):
             )
 
             if not soup:
+                # 页面加载失败，可能是浏览器 Tab 断开/崩溃（如电脑休眠导致）
+                # 重建浏览器实例后再重试，否则复用已死的 page 永远不可能成功
                 if attempt < max_retries:
                     wait = random.uniform(config.RETRY_DELAY_MIN, config.RETRY_DELAY_MAX)
                     print(f"   🔄 页面加载失败，{wait:.0f}秒后重试 ({attempt+1}/{max_retries})...")
+                    if shared_page:
+                        try:
+                            shared_page.quit()
+                        except Exception:
+                            pass
+                    try:
+                        shared_page = create_page(config.HEADLESS)
+                        print(f"      🔧 已重建浏览器实例")
+                    except Exception as e:
+                        print(f"      ⚠️ 重建浏览器失败: {e}，后续将逐次创建独立页面")
+                        shared_page = None
                     sleep(wait)
                 continue
 
@@ -945,8 +1006,17 @@ def run_once(debug=False):
     # 初始化数据库
     database.init_db()
 
-    # 执行监控
-    result = monitor_all_routes(debug=debug)
+    # 网络连通性检测（笔记本开机后 Wi-Fi 可能尚未连接）
+    wait_for_network()
+
+    # 爬取期间阻止系统空闲休眠（完成后立即释放，不影响轮次间的正常休眠）
+    _set_sleep_state(True)
+    try:
+        # 执行监控
+        result = monitor_all_routes(debug=debug)
+    finally:
+        _set_sleep_state(False)  # 释放休眠锁定
+
     stats = result['stats']
 
     # 记录日志
@@ -1043,6 +1113,26 @@ def run_scheduled():
         f"航线: {len(config.ROUTES)} 条 | 间隔: {config.MONITOR_INTERVAL_MINUTES} 分钟\n"
         f"日期: {monitor_dates[0]} ~ {monitor_dates[-1]}"
     )
+
+    # ---- 启动冷却检查：避免重启后立即重复爬取 ----
+    # 用 flight_prices 最新写入时间而非 monitor_log，因为半路关机时
+    # monitor_log 没写入但 flight_prices 已有数据，冷却仍应生效
+    _last_run = database.get_last_crawl_time() or database.get_last_run_time()
+    if _last_run:
+        try:
+            _last_dt = datetime.strptime(_last_run, '%Y-%m-%d %H:%M:%S')
+            _elapsed = (datetime.now() - _last_dt).total_seconds()
+            _interval_seconds = config.MONITOR_INTERVAL_MINUTES * 60
+            if _elapsed < _interval_seconds:
+                _wait = _interval_seconds - _elapsed
+                print(f"\n⏸️  上次爬取于 {_last_dt.strftime('%m-%d %H:%M:%S')} 完成"
+                      f"（距今 {_elapsed/60:.0f} 分钟）")
+                print(f"   等待 {_wait/60:.0f} 分钟后开始首次爬取..."
+                      f"（间隔={config.MONITOR_INTERVAL_MINUTES}分钟）")
+                sleep(_wait)
+                print("✅ 冷却结束，开始爬取...\n")
+        except (ValueError, TypeError):
+            pass  # 时间解析失败则跳过冷却
 
     while True:
         try:

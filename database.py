@@ -214,6 +214,40 @@ def get_price_history(flight_no, route_from, route_to, flight_date, days=30):
     return [{'price': r['price'], 'time': r['crawl_time']} for r in rows]
 
 
+def get_last_run_time():
+    """获取上一次成功监控运行的时间（北京时间字符串），若无记录返回 None"""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT run_time FROM monitor_log
+        WHERE status = 'OK'
+        ORDER BY run_time DESC
+        LIMIT 1
+    """)
+    row = cursor.fetchone()
+    conn.close()
+    if row:
+        return row['run_time']
+    return None
+
+
+def get_last_crawl_time():
+    """获取 flight_prices 表中最新的 crawl_time（北京时间字符串）
+
+    比 get_last_run_time 更可靠：即使爬虫半路被中断，已写入的数据也会被检测到，
+    重启冷却能正确生效，避免刚关机又开机时立即重复爬取。
+    若无记录返回 None。
+    """
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT MAX(crawl_time) FROM flight_prices")
+    row = cursor.fetchone()
+    conn.close()
+    if row and row[0]:
+        return row[0]
+    return None
+
+
 def cleanup_expired_alerts():
     """清理已过期的告警记录（航班日期已过，告警无意义）"""
     conn = get_connection()

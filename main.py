@@ -228,6 +228,324 @@ def send_to_feishu(content, webhook_url=None):
         return False
 
 
+FEISHU_CARD_MAX_BYTES = 28500  # 飞书 30KB 限制，留余量
+
+
+def _card_json_bytes(card):
+    """计算卡片 dict 的 JSON 字节大小"""
+    return len(json.dumps(card, ensure_ascii=False).encode('utf-8'))
+
+
+def _split_elements_at_hr(elements):
+    """将 elements 按 <hr> 分割为 groups + footer
+
+    返回 (groups, footer_or_none)
+    groups: list of list of elements，每个子列表以 hr 结尾
+    footer_or_none: 最后一个元素如果是 note 标签则作为 footer，否则为 None
+    """
+    if not elements:
+        return [], None
+
+    # 最后一个元素可能是 footer note
+    tail = elements[-1]
+    if tail.get("tag") == "note":
+        body = elements[:-1]
+        footer = tail
+    else:
+        body = elements
+        footer = None
+
+    groups = []
+    current = []
+    for el in body:
+        current.append(el)
+        if el.get("tag") == "hr":
+            groups.append(current)
+            current = []
+    if current:
+        # 残余元素（通常不会发生，因为 body 以 hr 结尾）
+        groups.append(current)
+
+    return groups, footer
+
+
+def _make_card(header_title, elements):
+    """构造卡片 dict"""
+    return {
+        "config": {"wide_screen_mode": True},
+        "header": {
+            "title": {"tag": "plain_text", "content": header_title},
+            "template": "blue"
+        },
+        "elements": elements
+    }
+
+
+def _make_footer(text):
+    return {"tag": "note", "elements": [{"tag": "plain_text", "content": text}]}
+
+
+def _split_oversized_card(card):
+    """将一张超大卡片按 <hr> 边界拆分为多张子卡
+
+    贪婪策略：尽可能往每张子卡里塞更多 groups，保持每张 < FEISHU_CARD_MAX_BYTES。
+    如果单个 group 就超过限制，则对该 group 内部的表格行做拆分。
+    """
+    config = card.get("config", {})
+    header = card.get("header", {})
+    elements = card.get("elements", [])
+    original_title = header.get("title", {}).get("content", "")
+
+    groups, footer = _split_elements_at_hr(elements)
+
+    if not groups:
+        # 无 hr 分割线，无法拆分，尝试截断
+        print(f"⚠️ 卡片无法拆分（无分割线），跳过")
+        return []
+
+    # 尝试贪婪打包
+    sub_cards = []
+    current_batch = []
+
+    for g in groups:
+        # 尝试将 g 加入当前批次
+        test_elements = []
+        for bg in current_batch + [g]:
+            test_elements.extend(bg)
+        if test_elements and test_elements[-1].get("tag") == "hr":
+            test_elements.pop()
+        if footer:
+            test_elements.append(footer)
+
+        test_card = _make_card(original_title, test_elements)
+
+        if _card_json_bytes(test_card) <= FEISHU_CARD_MAX_BYTES:
+            current_batch.append(g)
+        else:
+            # 当前批次已满，先保存
+            if current_batch:
+                sub_cards.append((current_batch, original_title))
+            # 检查单个 group 是否本身就超限
+            single_elements = list(g)
+            if single_elements and single_elements[-1].get("tag") == "hr":
+                single_elements.pop()
+            if footer:
+                single_elements.append(footer)
+            single_card = _make_card(original_title, single_elements)
+            if _card_json_bytes(single_card) <= FEISHU_CARD_MAX_BYTES:
+                current_batch = [g]
+            else:
+                # 单个 group 超限，需要拆表
+                print(f"⚠️ 单个航线日期仍超过限制 ({_card_json_bytes(single_card)} 字节)，拆分航班行...")
+                sub_sub_cards = _split_single_group(g, footer, original_title, config, header)
+                sub_cards.extend([(None, None, sc) for sc in sub_sub_cards])
+                current_batch = []
+
+    # 处理最后一批
+    if current_batch:
+        sub_cards.append((current_batch, original_title))
+
+    # 组装子卡
+    result = []
+    for item in sub_cards:
+        if len(item) == 3:
+            # 已组装好的卡片 (from _split_single_group)
+            result.append(item[2])
+        else:
+            batch, title = item
+            els = []
+            for bg in batch:
+                els.extend(bg)
+            if els and els[-1].get("tag") == "hr":
+                els.pop()
+            if footer:
+                els.append(footer)
+            result.append(_make_card(title, els))
+
+    # 重编号
+    total = len(result)
+    for idx, c in enumerate(result):
+        if total > 1:
+            base_title = original_title
+            # 去掉旧的页码后缀
+            import re
+            base_title = re.sub(r'\s*\(\d+/\d+\)\s*$', '', base_title)
+            c["header"]["title"]["content"] = f"{base_title} ({idx + 1}/{total})"
+            # 更新 footer
+            if c.get("elements"):
+                last = c["elements"][-1]
+                if last.get("tag") == "note":
+                    old_text = last["elements"][0]["content"]
+                    old_text = re.sub(r'\s*\(\d+/\d+\)\s*$', '', old_text)
+                    last["elements"][0]["content"] = f"{old_text} ({idx + 1}/{total})"
+
+    return result
+
+
+def _split_single_group(group_elements, footer, header_title, config, header):
+    """拆分单个 route+date group 的航班行
+
+    group_elements: [div_header, table, optional_extras_div, hr]
+    将 table 的 rows 拆分为多块，每块独立成卡。
+    """
+    div_header = None
+    table = None
+    extras_div = None
+
+    for el in group_elements:
+        if el.get("tag") == "hr":
+            continue
+        if el.get("tag") == "table" and table is None:
+            table = el
+        elif el.get("tag") == "div" and div_header is None:
+            div_header = el
+        elif el.get("tag") == "div":
+            extras_div = el
+
+    if not table:
+        # 没有表格，无法拆分
+        return [_make_card(header_title, group_elements[:-1] + ([footer] if footer else []))]
+
+    all_rows = table["rows"]
+    columns = table.get("columns", [])
+    page_size = table.get("page_size", 10)
+
+    # 估算每行字节开销
+    # 构造一个只有 1 行的卡片来算 overhead
+    if not all_rows:
+        return [_make_card(header_title,
+               [el for el in group_elements if el.get("tag") != "hr"] +
+               ([footer] if footer else []))]
+
+    # 算固定开销: config + header + div_header + table(空rows) + extras + footer
+    empty_table = {"tag": "table", "columns": columns, "rows": [], "page_size": page_size}
+    overhead_els = [div_header, empty_table]
+    if extras_div:
+        overhead_els.append(extras_div)
+    if footer:
+        overhead_els.append(footer)
+    overhead_card = _make_card(header_title, overhead_els)
+    overhead_bytes = _card_json_bytes(overhead_card)
+
+    # 单行开销
+    one_row_table = {"tag": "table", "columns": columns, "rows": [all_rows[0]], "page_size": page_size}
+    one_row_els = [div_header, one_row_table]
+    if extras_div:
+        one_row_els.append(extras_div)
+    if footer:
+        one_row_els.append(footer)
+    one_row_card = _make_card(header_title, one_row_els)
+    row_overhead = _card_json_bytes(one_row_card) - overhead_bytes
+
+    available = FEISHU_CARD_MAX_BYTES - overhead_bytes
+
+    sub_cards = []
+    i = 0
+    while i < len(all_rows):
+        # 贪心塞行
+        chunk_rows = []
+        current_bytes = 0
+        while i < len(all_rows):
+            next_bytes = current_bytes + (row_overhead if chunk_rows else 0) + row_overhead
+            # 第二行开始的增量近似用 row_overhead（实际会比这个小一点，因为 JSON 逗号开销小）
+            # 更准确的做法：构建实际 card 测大小
+            if chunk_rows:
+                test_table = {"tag": "table", "columns": columns,
+                              "rows": chunk_rows + [all_rows[i]], "page_size": page_size}
+                test_els = [div_header, test_table]
+                if extras_div:
+                    test_els.append(extras_div)
+                if footer:
+                    test_els.append(footer)
+                test_card = _make_card(header_title, test_els)
+                if _card_json_bytes(test_card) <= FEISHU_CARD_MAX_BYTES:
+                    chunk_rows.append(all_rows[i])
+                    i += 1
+                else:
+                    break
+            else:
+                # 第一行直接加
+                chunk_rows.append(all_rows[i])
+                i += 1
+
+        # 构建子卡
+        chunk_table = {"tag": "table", "columns": columns, "rows": chunk_rows, "page_size": page_size}
+        chunk_els = [div_header, chunk_table]
+        if extras_div:
+            chunk_els.append(extras_div)
+        if footer:
+            chunk_els.append(footer)
+        sub_cards.append(_make_card(header_title, chunk_els))
+
+    return sub_cards
+
+
+def send_to_feishu_card(card, webhook_url=None):
+    """发送交互卡片消息到飞书机器人
+
+    card 为卡片 dict（含 config/header/elements）或卡片 dict 列表。
+    列表时依次发送，每张间隔 0.5s 避免限流。
+    单张超过 30KB 限制时自动拆分。
+    """
+    url = webhook_url or config.FEISHU_WEBHOOK
+    if not url:
+        return False
+
+    if not isinstance(card, list):
+        cards = [card]
+    else:
+        cards = card
+
+    # 展开超限卡片
+    expanded = []
+    for c in cards:
+        card_bytes = _card_json_bytes(c)
+        if card_bytes > FEISHU_CARD_MAX_BYTES:
+            print(f"⚠️ 卡片过大 ({card_bytes} 字节)，自动拆分...")
+            sub_cards = _split_oversized_card(c)
+            if sub_cards:
+                print(f"   ✅ 拆分为 {len(sub_cards)} 张子卡")
+                expanded.extend(sub_cards)
+            else:
+                print(f"   ❌ 拆分失败，跳过")
+        else:
+            expanded.append(c)
+
+    success = True
+    for i, c in enumerate(expanded):
+        try:
+            card_str = json.dumps(c, ensure_ascii=False)
+            json_bytes = len(card_str.encode('utf-8'))
+
+            # 最终安全检查
+            if json_bytes > 30000:
+                print(f"⚠️ 卡片仍过大 ({json_bytes} 字节)，超过飞书 30KB 限制，跳过")
+                success = False
+                continue
+
+            payload = {"msg_type": "interactive", "card": card_str}
+            headers = {'Content-Type': 'application/json'}
+            resp = requests.post(url, headers=headers,
+                               data=json.dumps(payload, ensure_ascii=False),
+                               timeout=10)
+            if resp.status_code != 200:
+                print(f"❌ 飞书卡片推送失败: HTTP {resp.status_code} {resp.text[:200]}")
+                success = False
+                continue
+
+            print(f"✅ 交互卡片已推送到飞书 ({json_bytes} 字节{', ' + str(i+1) + '/' + str(len(expanded)) if len(expanded) > 1 else ''})")
+        except Exception as e:
+            print(f"❌ 飞书卡片推送异常: {e}")
+            success = False
+
+        # 多卡片时休息一下避免限流
+        if len(expanded) > 1 and i < len(expanded) - 1:
+            from time import sleep
+            sleep(0.5)
+
+    return success
+
+
 
 def format_alert_message(alerts, run_time):
     """格式化价格变动告警消息"""
@@ -347,6 +665,164 @@ def format_alert_summary_message(alert_summary, run_time):
     return "\n".join(lines)
 
 
+def _format_change_tag(f):
+    """格式化单个航班的变动标签（用于卡片表格），涨价红色、降价绿色
+
+    飞书 lark_md 仅支持 named colors: red, green, grey, default
+    """
+    if f['last_price'] is None:
+        return "🆕 新航班"
+    if f.get('is_stopped'):
+        return "<font color='grey'>⏸ 停止更新</font>"
+    if f['change_amount'] > 0:
+        return f"<font color='red'>🔺+{f['change_amount']}元 +{f['change_percent']}%</font>"
+    if f['change_amount'] < 0:
+        return f"<font color='green'>🔻{f['change_amount']}元 {f['change_percent']}%</font>"
+    return "<font color='grey'>➖ 未变动</font>"
+
+
+def build_alert_summary_card(alert_summary, run_time):
+    """构建飞书交互卡片（表格形式）的航班监控报告
+
+    每个告警航线+日期 = 一个标题 + 一个表格。
+    飞书限制：每卡最多 5 个表格，超出自动拆分为多张卡片。
+    每表 page_size=10，超出一页自动翻页。
+    表格列总宽 ~780px，手机上可左右滑动。
+
+    Args:
+        alert_summary: dict, keys=(from_name, to_name, date_str), values=航班 dict 列表
+        run_time: str, "YYYY-MM-DD HH:MM:SS"
+
+    Returns:
+        dict | list[dict] | None: 单卡片、多卡片列表，alert_summary 为空则返回 None
+    """
+    if not alert_summary:
+        return None
+
+    # 表格列定义（复用）
+    # 列顺序: 航司 → 时间 → ¥价格 → 变动 → 机型 → 出发 → 航班号 → AI分析
+    _table_columns = [
+        {"name": "airline",   "display_name": "航司",   "width": "80px",  "data_type": "text"},
+        {"name": "time",      "display_name": "时间",   "width": "100px", "data_type": "text"},
+        {"name": "price",     "display_name": "¥价格",  "width": "80px",  "data_type": "text"},
+        {"name": "change",    "display_name": "变动",   "width": "140px", "data_type": "lark_md"},
+        {"name": "aircraft",  "display_name": "机型",   "width": "120px", "data_type": "text"},
+        {"name": "departure", "display_name": "出发",   "width": "80px",  "data_type": "text"},
+        {"name": "flight_no", "display_name": "航班号", "width": "80px",  "data_type": "text"},
+        {"name": "ai_trend",  "display_name": "AI分析", "width": "150px", "data_type": "text"},
+    ]
+
+    MAX_TABLES_PER_CARD = 5
+
+    # Step 1: 为每个 route+date 构建 element 组
+    route_groups = []  # [(from_name, to_name, date_str, flight_count, elements_for_this_route)]
+    total_flights = 0
+
+    sorted_keys = sorted(alert_summary.keys())
+    for key in sorted_keys:
+        from_name, to_name, date_str = key
+        flights = alert_summary[key]
+        total_flights += len(flights)
+        group_elements = []
+
+        # 标题
+        group_elements.append({
+            "tag": "div",
+            "text": {
+                "tag": "lark_md",
+                "content": f"**✈️ {from_name} → {to_name}  {date_str}**（共 {len(flights)} 班）"
+            }
+        })
+
+        # 表格 rows
+        rows = []
+        for f in sorted(flights, key=lambda x: x['price']):
+            ac = f.get('aircraft_type', '') or ''
+            if is_widebody(ac):
+                ac = f"⭐{ac}"
+            airport = _short_airport(f.get('departure_airport', ''))
+            rows.append({
+                "airline": f['airline'],
+                "time": f"{f['departure_time']}-{f['arrival_time']}",
+                "price": f"¥{f['price']}",
+                "change": _format_change_tag(f),
+                "aircraft": ac,
+                "departure": airport,
+                "flight_no": f['flight_no'],
+                "ai_trend": f.get('ai_trend', '') or '',
+            })
+
+        group_elements.append({
+            "tag": "table",
+            "columns": _table_columns,
+            "rows": rows,
+            "page_size": 10,
+        })
+
+        # 补充信息（仅机型变更，AI分析已作为表格列）
+        extras = []
+        for f in flights:
+            notes = []
+            tc = f.get('aircraft_type_change')
+            if tc:
+                notes.append(f"🔄 机型变更: {tc['from']} → {tc['to']}")
+            if f.get('ai_trend'):
+                notes.append(f.get('ai_trend', ''))
+            if notes:
+                extras.append(f"**{f['flight_no']}**: {'；'.join(notes)}")
+        if extras:
+            group_elements.append({
+                "tag": "div",
+                "text": {"tag": "lark_md", "content": "\n".join(extras)}
+            })
+
+        # hr 分割线
+        group_elements.append({"tag": "hr"})
+
+        route_groups.append((from_name, to_name, date_str, len(flights), group_elements))
+
+    # Step 2: 按每卡最多 5 个表拆分
+    cards = []
+    for page_start in range(0, len(route_groups), MAX_TABLES_PER_CARD):
+        page_groups = route_groups[page_start:page_start + MAX_TABLES_PER_CARD]
+        page_total_flights = sum(g[3] for g in page_groups)
+
+        elements = []
+        for _, _, _, _, group_els in page_groups:
+            elements.extend(group_els)
+
+        # 去掉最后多余的 hr
+        if elements and elements[-1].get("tag") == "hr":
+            elements.pop()
+
+        # 页脚
+        page_num = page_start // MAX_TABLES_PER_CARD + 1
+        total_pages = (len(route_groups) + MAX_TABLES_PER_CARD - 1) // MAX_TABLES_PER_CARD
+        footer_text = f"📌 共 {len(alert_summary)} 条航线日期, {total_flights} 个航班 · {run_time}"
+        if total_pages > 1:
+            footer_text += f" ({page_num}/{total_pages})"
+
+        elements.append({
+            "tag": "note",
+            "elements": [{"tag": "plain_text", "content": footer_text}]
+        })
+
+        header_title = f"📋 航班监控 {run_time[:10]}"
+        if total_pages > 1:
+            header_title += f" ({page_num}/{total_pages})"
+
+        cards.append({
+            "config": {"wide_screen_mode": True},
+            "header": {
+                "title": {"tag": "plain_text", "content": header_title},
+                "template": "blue"
+            },
+            "elements": elements
+        })
+
+    return cards[0] if len(cards) == 1 else cards
+
+
 def is_widebody(aircraft_type):
     """判断是否为宽体/大客机
 
@@ -461,7 +937,8 @@ def crawl_flights_page(dep_code, arr_code, dep_date, page=None, headless=True, d
 
         # 调试模式：保存原始 HTML（滚动前）
         if debug:
-            debug_file = f"debug_{dep_code}_{arr_code}_{dep_date}.html"
+            os.makedirs("debug", exist_ok=True)
+            debug_file = f"debug/debug_{dep_code}_{arr_code}_{dep_date}.html"
             with open(debug_file, 'w', encoding='utf-8') as f:
                 f.write(page.html)
             print(f"      🐛 调试HTML已保存: {debug_file}")
@@ -519,7 +996,7 @@ def crawl_flights_page(dep_code, arr_code, dep_date, page=None, headless=True, d
 
         # 调试模式：保存滚动后的 HTML
         if debug:
-            debug_file2 = f"debug_{dep_code}_{arr_code}_{dep_date}_scrolled.html"
+            debug_file2 = f"debug/debug_{dep_code}_{arr_code}_{dep_date}_scrolled.html"
             with open(debug_file2, 'w', encoding='utf-8') as f:
                 f.write(page.html)
             print(f"      🐛 滚动后HTML已保存: {debug_file2}")
@@ -955,13 +1432,17 @@ def monitor_all_routes(debug=False):
             # 优先项全部爬完 → 仅当有实际告警时才推送，避免无告警时烧飞书消息
             if alert_summary and alerts:
                 push_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                msg = format_alert_summary_message(alert_summary, push_time)
                 print(f"\n   {'─'*50}")
                 print(f"   📤 优先航线数据已就绪，立即推送（其他航线继续后台爬取）")
                 print(f"   {'─'*50}")
+                # 飞书推送交互卡片（表格）
+                card = build_alert_summary_card(alert_summary, push_time)
+                if card:
+                    send_to_feishu_card(card)
+                # 控制台输出文本版（便于本地查看日志）
                 if config.CONSOLE_OUTPUT:
+                    msg = format_alert_summary_message(alert_summary, push_time)
                     print(f"\n{msg}")
-                send_to_feishu(msg)
                 pushed_summary_keys = set(alert_summary.keys())
 
         # ================================================================
@@ -1035,10 +1516,13 @@ def run_once(debug=False):
     # 告警航线+日期：推送完整航班报告（全部航班+变动信息）
     # 注意：阶段1已推送过优先项则跳过，避免重复推送
     if result.get('alert_summary') and result.get('alerts') and not result.get('pushed_summary_keys'):
-        msg = format_alert_summary_message(result['alert_summary'], run_time)
+        # 飞书推送交互卡片（表格）
+        card = build_alert_summary_card(result['alert_summary'], run_time)
+        if card:
+            send_to_feishu_card(card)
         if config.CONSOLE_OUTPUT:
+            msg = format_alert_summary_message(result['alert_summary'], run_time)
             print(f"\n{msg}")
-        send_to_feishu(msg)
 
     # 常规价格变动告警（排除已在阶段1推送过的航线+日期，避免重复）
     pushed_keys = result.get('pushed_summary_keys', set())
@@ -1199,16 +1683,16 @@ if __name__ == "__main__":
         # 初始化 Chrome 用户数据目录：打开可见浏览器让用户手动浏览携程建立身份
         print("""
    ╔══════════════════════════════════════════════════╗
-   ║  🔧 Chrome 身份初始化                            ║
+   ║  🔧 Chrome 身份初始化                              ║
    ║                                                  ║
-   ║  即将打开 Chrome 浏览器，请按以下步骤操作：        ║
-   ║  1. 浏览器会自动打开携程首页                      ║
-   ║  2. 搜索一条航线（比如 北京→泉州）                 ║
-   ║  3. 随便点点，翻翻页面，模拟真实用户               ║
-   ║  4. (可选) 登录携程账号                           ║
-   ║  5. 完成后回到终端，按 Enter 保存身份并退出        ║
+   ║  即将打开 Chrome 浏览器，请按以下步骤操作：             ║
+   ║  1. 浏览器会自动打开携程首页                          ║
+   ║  2. 搜索一条航线（比如 北京→泉州）                     ║
+   ║  3. 随便点点，翻翻页面，模拟真实用户                    ║
+   ║  4. (可选) 登录携程账号                              ║
+   ║  5. 完成后回到终端，按 Enter 保存身份并退出             ║
    ║                                                  ║
-   ║  之后爬虫将复用此身份，不再被识别为机器             ║
+   ║  之后爬虫将复用此身份，不再被识别为机器                  ║
    ╚══════════════════════════════════════════════════╝
    """)
         input("   按 Enter 开始...")

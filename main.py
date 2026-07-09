@@ -1599,9 +1599,9 @@ def run_scheduled():
     )
 
     # ---- 启动冷却检查：避免重启后立即重复爬取 ----
-    # 用 flight_prices 最新写入时间而非 monitor_log，因为半路关机时
-    # monitor_log 没写入但 flight_prices 已有数据，冷却仍应生效
-    _last_run = database.get_last_crawl_time() or database.get_last_run_time()
+    # 优先用 monitor_log（run_time 在爬取完成后才写入，代表真实结束时间）
+    # 半路关机时 monitor_log 没写入，回退到 flight_prices 的 crawl_time
+    _last_run = database.get_last_run_time() or database.get_last_crawl_time()
     if _last_run:
         try:
             _last_dt = datetime.strptime(_last_run, '%Y-%m-%d %H:%M:%S')

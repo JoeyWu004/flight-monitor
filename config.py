@@ -36,8 +36,7 @@ ROUTES = [
 # 键: (出发代码, 到达代码) 元组，值: 该航线对应的告警日期列表
 # 两个条件同时生效：航线必须是键 AND 日期必须在对应列表中才会推送
 ALARM = {
-    ("bjs", "jjn"): ["2026-07-05", "2026-07-12", "2026-07-19"],
-    ("bjs", "xmn"): ["2026-07-05", "2026-07-12", "2026-07-19"],
+
 }
 # 爬虫仍然会抓取所有航线+日期的数据存入数据库，只是不推送给飞书
 
@@ -104,6 +103,11 @@ SCROLL_DELAY_SECONDS = 2
 # ============================================================
 # 反反爬配置
 # ============================================================
+# 浏览器可执行文件路径（默认自动探测，找不到 Chrome 时可改用 Edge）
+# Windows 示例: r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"
+# 留空则自动探测（优先 Chrome，其次 Edge）
+BROWSER_PATH = r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"
+
 # Chrome 用户数据目录（持久化 Cookie 和浏览器指纹，绕过携程反爬）
 # 首次使用请运行: python main.py --setup  打开浏览器手动浏览携程建立身份
 CHROME_USER_DATA_PATH = "chrome_user_data"

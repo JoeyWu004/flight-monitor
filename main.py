@@ -856,6 +856,10 @@ def create_page(headless=True):
     """
     co = ChromiumOptions()
 
+    # 指定浏览器路径（为空时 DrissionPage 自动探测）
+    if config.BROWSER_PATH:
+        co.set_browser_path(config.BROWSER_PATH)
+
     # 反检测：去掉自动化标记
     co.set_argument('--disable-blink-features=AutomationControlled')
     co.set_argument('--no-sandbox')
@@ -1109,6 +1113,13 @@ def parse_single_flight(flight_div):
                     return None  # 有 transfer-info 但没有经停标记 → 中转
             # 航空公司字段包含航班号格式 = 多段拼接航班
             if re.search(r'\b[A-Z0-9]{2}\d{2,4}[A-Z]?\b', airline):
+                return None
+            # 航司名称后面跟产品编码（如"华夏航空 G535F2N"）= 通程/套餐转卖，非直飞
+            # 产品编码特征：字母+数字混杂，非标准航班号格式
+            if re.search(r'[一-鿿]\s+[A-Z]\d{3}[A-Z]\d', airline):
+                return None
+            # 无机型信息 = 非直飞航班（直飞航班携程一定会展示机型）
+            if not aircraft_type:
                 return None
 
         # 过滤共享/代码共享航班（DOM 中有 <span class="plane-share">共享</span>）
@@ -1633,7 +1644,8 @@ def run_scheduled():
         # 等待下一次
         next_run = datetime.now() + timedelta(minutes=config.MONITOR_INTERVAL_MINUTES)
         print(f"\n⏰ 下次监控: {next_run.strftime('%H:%M:%S')} "
-              f"(等待 {config.MONITOR_INTERVAL_MINUTES} 分钟)...")
+              f"(等待 {config.MONITOR_INTERVAL_MINUTES} 分钟)..."
+              f"")
         sleep(config.MONITOR_INTERVAL_MINUTES * 60)
 
 

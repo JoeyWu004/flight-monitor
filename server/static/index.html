@@ -771,6 +771,10 @@ function renderFlightTable() {
         va = a.price || 0;
         vb = b.price || 0;
         return sortDirection === "asc" ? va - vb : vb - va;
+      case "min_price":
+        va = a.min_price || 0;
+        vb = b.min_price || 0;
+        return sortDirection === "asc" ? va - vb : vb - va;
       case "change_amount":
         // 停止更新始终排最后，新航班次之，然后按变动金额排序
         const getChangePriority = (f) => f.is_stopped ? 2 : (f.last_price === null ? 1 : 0);
@@ -806,6 +810,7 @@ function renderFlightTable() {
       <th class="sort-header">出发机场${sortArrow("departure_airport")}</th>
       <th class="sort-header">到达机场${sortArrow("arrival_airport")}</th>
       <th class="sort-header">价格${sortArrow("price")}</th>
+      <th class="sort-header">最低价${sortArrow("min_price")}</th>
       <th class="sort-header">变动${sortArrow("change_amount")}</th>
       <th>抓取时间</th>
     </tr></thead><tbody>`;
@@ -847,6 +852,7 @@ function renderFlightTable() {
       <td>${f.departure_airport}</td>
       <td>${f.arrival_airport || ''}</td>
       <td class="price">¥${f.price}</td>
+      <td style="${f.min_price != null && f.price === f.min_price ? 'color:#3fb950;font-weight:600' : 'color:#8b949e'}">${f.min_price != null ? (f.price === f.min_price ? '💚 ¥' + f.min_price : '¥' + f.min_price) : '-'}</td>
       <td>${changeHtml}</td>
       <td style="font-size:12px;color:#8b949e">${(f.crawl_time||'').slice(0,16)}</td>
     </tr>`;

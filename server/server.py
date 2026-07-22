@@ -258,6 +258,12 @@ async def get_flights(request: Request, frm: str = "", to: str = "", date: str =
                 ORDER BY crawl_time DESC LIMIT 1
             """, (r["flight_no"], frm, to, date, r["crawl_time"])).fetchone()
 
+            # 查询历史最低价格
+            min_price_row = conn.execute("""
+                SELECT MIN(price) FROM flight_prices
+                WHERE flight_no = ? AND route_from = ? AND route_to = ? AND flight_date = ?
+            """, (r["flight_no"], frm, to, date)).fetchone()
+
             flight = {
                 "flight_no": r["flight_no"],
                 "airline": r["airline"] or "",
@@ -267,6 +273,7 @@ async def get_flights(request: Request, frm: str = "", to: str = "", date: str =
                 "departure_time": r["departure_time"] or "",
                 "arrival_time": r["arrival_time"] or "",
                 "price": r["price"],
+                "min_price": min_price_row[0] if min_price_row else None,
                 "crawl_time": r["crawl_time"],
             }
 
@@ -617,6 +624,12 @@ async def get_multi_flights(
                     ORDER BY crawl_time DESC LIMIT 1
                 """, (r["flight_no"], frm, dest, date, r["crawl_time"])).fetchone()
 
+                # 查询历史最低价格
+                min_price_row = conn.execute("""
+                    SELECT MIN(price) FROM flight_prices
+                    WHERE flight_no = ? AND route_from = ? AND route_to = ? AND flight_date = ?
+                """, (r["flight_no"], frm, dest, date)).fetchone()
+
                 flight = {
                     "flight_no": r["flight_no"],
                     "airline": r["airline"] or "",
@@ -626,6 +639,7 @@ async def get_multi_flights(
                     "departure_time": r["departure_time"] or "",
                     "arrival_time": r["arrival_time"] or "",
                     "price": r["price"],
+                    "min_price": min_price_row[0] if min_price_row else None,
                     "route_to": dest,
                     "route_to_name": r["route_to_name"] or dest,
                     "crawl_time": r["crawl_time"],
@@ -710,7 +724,10 @@ async def index():
     """返回前端页面"""
     index_path = STATIC_DIR / "index.html"
     if index_path.exists():
-        return FileResponse(index_path)
+        return FileResponse(
+            index_path,
+            headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+        )
     return JSONResponse({"detail": "index.html not found"}, status_code=404)
 
 

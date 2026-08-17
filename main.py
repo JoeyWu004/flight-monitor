@@ -893,7 +893,8 @@ def create_page(headless=True):
         user_dir = os.path.abspath(config.CHROME_USER_DATA_PATH)
         os.makedirs(user_dir, exist_ok=True)
         co.set_user_data_path(user_dir)
-        co.auto_port()  # 自动选择调试端口，避免多实例冲突
+        # 注意：不要调用 co.auto_port()。它会重新分配一个临时 autoPortData 目录，
+        # 覆盖掉上面的 user-data-dir，导致 Cookie/登录态/指纹无法持久化（每轮都是全新匿名身份）。
 
     if headless:
         co.headless()

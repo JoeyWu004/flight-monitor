@@ -11,6 +11,7 @@
 - ✈️ **机型识别**：自动提取机型，大客机（宽体）标注 ⭐
 - 🔄 机型变动检测（如 A320 → A330）
 - 🛡️ **反爬保护**：持久化 Chrome 身份、UA 轮换、随机窗口尺寸、随机延迟
+- 🌐 **浏览器可自定义**：支持 Chrome / Edge，在 `config.py` 用 `BROWSER_PATH` 指向浏览器可执行文件即可
 - 🔁 空结果自动重试 + 浏览器实例崩溃自动重建
 
 ### 价格告警
@@ -78,7 +79,7 @@ python main.py --setup
 ROUTES = [
     {"from": "bjs", "to": "jjn", "from_name": "北京", "to_name": "泉州"},
     {"from": "bjs", "to": "xmn", "from_name": "北京", "to_name": "厦门",
-     "alert_only": True},   # 只在告警日期爬，不爬满 30 天
+     "alert_only": True},   # 只在 ALARM 中为本航线配置的日期爬取（需同时加入 ALARM）
     {"from": "jjn", "to": "bjs", "from_name": "泉州", "to_name": "北京"},
 ]
 ```
@@ -88,23 +89,23 @@ ROUTES = [
 |------|------|
 | `from` / `to` | 携程城市三字码 |
 | `from_name` / `to_name` | 显示用中文名 |
-| `alert_only` | 可选，`True` 表示只在告警日期爬取 |
+| `alert_only` | 可选，`True` = 只在 `ALARM` 为该航线配置的日期爬取；**该航线必须已加入 `ALARM`**，否则整条航线被跳过、完全不爬 |
+| `days_ahead` | 可选，覆盖全局 `MONITOR_DAYS_AHEAD`（对 `alert_only` 航线无效） |
 
-> 💡 常用城市代码：`bjs` 北京、`sha` 上海、`can` 广州、`szx` 深圳、`ctu` 成都、`cgo` 郑州。
+> 💡 常用城市代码：`bjs` 北京、`sha` 上海、`can` 广州、`szx` 深圳、`ctu` 成都、`cgo` 郑州、`jjn` 泉州、`xmn` 厦门、`hsn` 舟山、`ngb` 宁波。
 
 **② 告警配置**
 
 ```python
 ALARM = {
-    ("bjs", "jjn"): ["2026-07-05", "2026-07-12", "2026-07-19"],
-    ("bjs", "xmn"): ["2026-07-05", "2026-07-12", "2026-07-19"],
+    ("jjn", "bjs"): ["2026-10-17"],   # 航线是键 + 日期在列表中，两者同时命中才推送
 }
 ```
 
-- 键：`(出发代码, 到达代码)` 元组
-- 值：该航线的告警日期列表
-- 设为空 `{}` = 不推送飞书、不调用 DeepSeek（静默爬取入库）
-- 爬虫仍然会抓取所有数据，只是不推送
+- 键：`(出发代码, 到达代码)` 元组；值：该航线的告警日期列表
+- **同时满足**「航线是键 且 日期在列表中」才会推送飞书 + 调用 DeepSeek
+- `ALARM` 里是否包含某航线，同时决定了 `alert_only` 航线要不要爬（见下方行为说明）
+- `ALARM` 空 `{}` 时普通航线静默爬取入库（不推送、不调用 DeepSeek），但 `alert_only` 航线会被跳过
 
 **③ 飞书 Webhook**
 
@@ -134,6 +135,7 @@ python main.py --setup      # 初始化 Chrome 身份
 ```
 
 > ⚠️ 建议以管理员身份运行，否则浏览器自动化可能无法正常工作。
+> 🌐 浏览器可选 Chrome 或 Edge：在 `config.py` 把 `BROWSER_PATH` 设为对应浏览器可执行文件即可（如本机只有 Edge 就填 Edge 的路径；留空则由 DrissionPage 自动探测默认浏览器）。
 
 ## 配置参考
 
@@ -141,11 +143,12 @@ python main.py --setup      # 初始化 Chrome 身份
 
 | 配置 | 说明 | 默认值 |
 |------|------|--------|
-| `ROUTES` | 航线列表 | 北京↔泉州/厦门 |
-| `ALARM` | 告警航线+日期 | `{}` |
+| `ROUTES` | 航线列表 | 北京⇄泉州，北京⇄厦门/舟山/宁波（后三者 `alert_only`） |
+| `ALARM` | 告警航线+日期 | 见当前 `config.py` |
 | `MONITOR_DAYS_AHEAD` | 监控未来多少天 | 30 |
 | `MONITOR_INTERVAL_MINUTES` | 两轮监控间隔（分钟） | 180 |
 | `HEADLESS` | 无头模式（True=后台运行） | `True` |
+| `BROWSER_PATH` | 浏览器可执行文件路径（留空由 DrissionPage 自动探测） | 自动探测 |
 | `DIRECT_FLIGHTS_ONLY` | 仅直飞航班 | `True` |
 | `RED_EYE_START_HOUR` | 红眼开始时间 | 23 |
 | `RED_EYE_END_HOUR` | 红眼结束时间 | 6 |
@@ -166,18 +169,20 @@ python main.py --setup      # 初始化 Chrome 身份
 | `RETRY_DELAY_MIN` / `MAX` | 重试前等待范围（秒） | 30 / 60 |
 | `NETWORK_CHECK_INTERVAL` | 网络检测间隔（秒） | 15 |
 
-### 告警行为说明
+### 告警与爬取行为说明
 
-`ALARM` 为空 `{}` 时：
-- 正常爬取所有航线+日期，入库
-- **不推送飞书，不调用 DeepSeek**
-- 适合日常静默积累数据
+某条航线**爬不爬、爬哪些日期**，由其自身的 `alert_only` 与是否在 `ALARM` 中共同决定：
 
-`ALARM` 有配置时：
-- 告警航线+日期**优先爬取**，爬完立即推送完整航班报告
-- 推送后继续爬剩余数据
-- 仅告警航线+日期触发价格变动通知
+| 航线类型 | 不在 `ALARM` 中 | 在 `ALARM` 中 |
+|------|------|------|
+| 普通航线 | 爬满未来 N 天入库，不推送 | 爬满 N 天；仅 `ALARM` 列出的日期**优先爬取并推送** |
+| `alert_only` 航线 | **整条跳过，完全不爬** | 只爬 `ALARM` 为该航线列出的日期，命中即推送 |
+
+其他规则：
+- `MONITOR_DAYS_AHEAD = 0` 且 `ALARM` 非空时：只爬 `ALARM` 中的航线，不爬无关航线
+- 告警项爬完**立即推送**完整航班报告（全部航班 + 涨跌 + 距上次时间），再继续爬其余数据
 - 航班日期一过，相关告警自动清理
+- 所有航线都非 `alert_only` 且 `ALARM` 空 `{}` 时 = 纯静默积累数据（只入库，不推送、不调用 DeepSeek）
 
 ## Web 数据看板
 
@@ -195,12 +200,13 @@ python server.py
 
 ### 功能
 
-- 📊 航班列表（价格、涨跌、机型、航站楼）
-- 📈 历史价格趋势图（ECharts，支持多目的地多航班对比）
-- 🗺️ 多目的地同时查看（逗号分隔）
-- 🤖 AI 助手（聊天式问答，分析价格走势）
-- 📅 多日期价格摘要 + 最佳入手推荐
-- 🔐 登录认证（公网部署用）
+- 📊 航班列表（航司、机型、起降机场、价格、涨跌），支持**表头排序**、点击行查看该航班走势
+- 💚 **历史最低价**对比：当日价格即历史最低时标绿高亮
+- 📈 历史价格趋势图（ECharts），多目的地多航班同时对比，图例可开关
+- 🗺️ **多目的地多选**同时查看、**出发/到达一键互换**、今日/前后日快捷切换
+- 🤖 **AI 助手**（DeepSeek 聊天问答）：回答渲染 Markdown；随附页面真实数据（航班列表/价格趋势/多日期摘要），可一键查看并复制**每次实际发送的 Prompt**（调试）
+- 📅 多日期价格摘要 + 最佳入手日期推荐
+- 🔐 JWT 登录认证，公网部署也安全
 
 ### 服务器部署
 
@@ -274,6 +280,7 @@ Flight-Monitor/
 - [requests](https://github.com/psf/requests) — HTTP 请求
 - [FastAPI](https://fastapi.tiangolo.com/) + [Uvicorn](https://www.uvicorn.org/) — Web 看板
 - [ECharts](https://echarts.apache.org/) — 前端图表
+- [marked](https://marked.js.org/) — 看板 AI 助手回复的 Markdown 渲染
 
 ## 注意事项
 

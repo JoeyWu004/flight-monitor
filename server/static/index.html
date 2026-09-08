@@ -91,6 +91,15 @@ body {
 .date-nav-btn:hover { background: #30363d; }
 .date-nav-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
+/* 出发/到达互换按钮 */
+.swap-btn {
+  background: #21262d; color: #58a6ff; border: 1px solid #30363d;
+  border-radius: 6px; padding: 8px 9px; font-size: 15px; line-height: 1;
+  cursor: pointer; transition: background .15s; white-space: nowrap;
+}
+.swap-btn:hover:not(:disabled) { background: #30363d; border-color: #58a6ff; }
+.swap-btn:disabled { opacity: 0.4; cursor: not-allowed; color: #8b949e; }
+
 /* 图表区 */
 .chart-section {
   background: #161b22; border: 1px solid #30363d;
@@ -259,6 +268,33 @@ tr:hover td { background: #1c2128; }
 .chat-msg.ai h1, .chat-msg.ai h2, .chat-msg.ai h3 { font-size: 14px; margin: 8px 0 4px; color: #f0f6fc; }
 .chat-msg.ai hr { border: 0; border-top: 1px solid #30363d; margin: 8px 0; }
 .chat-msg.ai em { color: #f0f6fc; }
+
+/* 查看发送给 AI 的 Prompt/上下文（调试用） */
+.chat-debug {
+  align-self: flex-start; width: 92%; max-width: 92%;
+  border: 1px dashed #58a6ff; border-radius: 8px;
+  background: rgba(88,166,255,0.05);
+  padding: 8px 10px; font-size: 12px; color: #8b949e;
+}
+.chat-debug summary { cursor: pointer; user-select: none; color: #58a6ff; font-weight: 600; }
+.chat-debug .lbl { color: #8b949e; font-weight: 600; margin: 8px 0 2px; }
+.chat-debug pre {
+  background: #0d1117; color: #c9d1d9; padding: 8px 10px; border-radius: 6px;
+  font-size: 11.5px; line-height: 1.5; margin: 4px 0 8px; overflow: auto;
+  white-space: pre-wrap; word-break: break-word; max-height: 160px;
+}
+.chat-debug .copy-btn {
+  background: #21262d; border: 1px solid #30363d; color: #58a6ff;
+  border-radius: 6px; font-size: 11px; padding: 3px 8px; cursor: pointer;
+}
+.chat-debug .copy-btn:hover { background: #30363d; }
+.chat-modal-header .chat-debug-toggle {
+  font-size: 12px; font-weight: 500; color: #8b949e;
+  border: 1px solid #30363d; border-radius: 6px; padding: 3px 8px;
+}
+.chat-modal-header .chat-debug-toggle.active { color: #58a6ff; border-color: #58a6ff; }
+.chat-modal-header .chat-debug-toggle:hover:not(.active) { color: #f0f6fc; }
+
 .chat-input-row {
   display: flex; gap: 8px; padding: 12px 18px; border-top: 1px solid #21262d;
 }
@@ -340,6 +376,11 @@ tr:hover td { background: #1c2128; }
           <option value="">请选择出发城市</option>
         </select>
       </div>
+      <!-- 出发/到达互换 -->
+      <div class="filter-group" style="flex:0 0 auto;min-width:0;width:auto;justify-content:flex-end">
+        <label>&nbsp;</label>
+        <button id="btn-swap" class="swap-btn" onclick="swapRoute()" disabled>⇄</button>
+      </div>
       <div class="filter-group" style="flex:3;min-width:250px">
         <label>到达城市（可多选） <a href="#" onclick="toggleAllDests();return false" style="color:#58a6ff;font-size:12px;margin-left:6px">全选/取消</a></label>
         <div id="dest-checkboxes" style="display:flex;flex-wrap:wrap;gap:8px 16px;padding:4px 0">
@@ -392,6 +433,7 @@ tr:hover td { background: #1c2128; }
     <div class="chat-modal" onclick="event.stopPropagation()">
       <div class="chat-modal-header">
         <span>🤖 AI 航班助手</span>
+        <button id="chat-debug-toggle" class="chat-debug-toggle active" onclick="toggleDebugPrompt()" title="每次发送后在对话中列出实际发送给 AI 的 Prompt 与上下文">查看发送内容</button>
         <button onclick="toggleChat()">&times;</button>
       </div>
       <div class="chat-messages" id="chat-messages"></div>
@@ -535,6 +577,16 @@ function buildFromSelect() {
   });
 }
 
+function destCheckboxesHtml(from) {
+  const dests = routes.filter(r => r.from === from);
+  if (!dests.length) return '<span style="color:#8b949e;font-size:13px">无可用目的地</span>';
+  return dests.map(r =>
+    `<label style="display:flex;align-items:center;gap:4px;cursor:pointer;color:#c9d1d9;font-size:13px;white-space:nowrap">
+      <input type="checkbox" value="${r.to}" onchange="onDestChange()">${r.to_name}
+    </label>`
+  ).join('');
+}
+
 function onFromChange() {
   const from = document.getElementById("select-from").value;
   const container = document.getElementById("dest-checkboxes");
@@ -543,20 +595,24 @@ function onFromChange() {
 
   if (!from) {
     container.innerHTML = '<span style="color:#8b949e;font-size:13px">请先选择出发城市</span>';
+    updateSwapBtn();
     return;
   }
 
-  // 构建复选框
-  const dests = routes.filter(r => r.from === from);
-  if (!dests.length) {
-    container.innerHTML = '<span style="color:#8b949e;font-size:13px">无可用目的地</span>';
-    return;
-  }
-  container.innerHTML = dests.map(r =>
-    `<label style="display:flex;align-items:center;gap:4px;cursor:pointer;color:#c9d1d9;font-size:13px;white-space:nowrap">
-      <input type="checkbox" value="${r.to}" onchange="onDestChange()">${r.to_name}
-    </label>`
-  ).join('');
+  container.innerHTML = destCheckboxesHtml(from);
+  updateSwapBtn();
+}
+
+function updateSwapBtn() {
+  const btn = document.getElementById("btn-swap");
+  if (!btn) return;
+  const from = document.getElementById("select-from").value;
+  const dests = getSelectedDests();
+  const ok = !!from && dests.length === 1;
+  btn.disabled = !ok;
+  btn.title = ok
+    ? "互换出发城市和到达城市"
+    : "先选择出发城市，且到达城市只勾选一个才能互换";
 }
 
 function getSelectedDests() {
@@ -571,10 +627,44 @@ function toggleAllDests() {
   onDestChange();
 }
 
+async function swapRoute() {
+  const fromSel = document.getElementById("select-from");
+  const fromCode = fromSel.value;
+  const dests = getSelectedDests();
+  if (!fromCode || dests.length !== 1) return;
+
+  const toCode = dests[0];
+  const fromName = fromSel.options[fromSel.selectedIndex]?.textContent || fromCode;
+  const toRoute = routes.find(r => r.from === fromCode && r.to === toCode);
+  const toName = toRoute ? toRoute.to_name : toCode;
+
+  // 目标城市必须先能作为“出发城市”出现（即库里存在以其为出发点的航线）
+  if (!routes.some(r => r.from === toCode)) {
+    alert(`数据库里没有以「${toName}」为出发城市的航线，无法互换`);
+    return;
+  }
+  // 互换后到达城市=原出发城市，若库中不存在反方向航线则整套互换无意义
+  if (!routes.some(r => r.from === toCode && r.to === fromCode)) {
+    alert(`数据库里没有「${toName} → ${fromName}」方向的数据，无法互换`);
+    return;
+  }
+
+  // 切换出发城市并重建到达城市复选框；保留日期下拉，由 onDestChange 决定是否沿用原日期
+  fromSel.value = toCode;
+  const container = document.getElementById("dest-checkboxes");
+  container.innerHTML = destCheckboxesHtml(toCode);
+  const reverseCb = container.querySelector(`input[value="${fromCode}"]`);
+  if (reverseCb) reverseCb.checked = true;
+  updateSwapBtn();
+
+  await onDestChange();
+}
+
 async function onDestChange() {
   const from = document.getElementById("select-from").value;
   const dests = getSelectedDests();
   const dateSel = document.getElementById("select-date");
+  updateSwapBtn();
 
   if (!from || !dests.length) {
     dateSel.innerHTML = '<option value="">请先选择航线和日期</option>';
@@ -1313,6 +1403,69 @@ if (token) {
 // ============================================================
 let chatHistory = [];
 
+// 基础系统提示词（与 sendChat 实际发送一致）
+const CHAT_BASE_PROMPT = "你是航班价格监控助手。用户在看Flight-Monitor数据看板，可以回答航班价格、趋势分析、出行建议等问题。请简洁回答。";
+let promptDebugOn = true;
+
+function toggleDebugPrompt() {
+  promptDebugOn = !promptDebugOn;
+  const b = document.getElementById("chat-debug-toggle");
+  if (b) b.classList.toggle("active", promptDebugOn);
+}
+
+// 在对话中列出本次实际发送给 AI 的提问、系统提示词与随附页面上下文
+function appendPromptDebug(text, ctxParts, pageCtx) {
+  const container = document.getElementById("chat-messages");
+
+  const details = document.createElement("details");
+  details.className = "chat-debug";
+  details.open = true;
+
+  const histNote = chatHistory.length > 1
+    ? `（system + 本次提问 + 此前对话 ${chatHistory.length - 1} 条）`
+    : "（system + 本次提问）";
+  const sum = document.createElement("summary");
+  sum.textContent = `🔍 本次发送给 AI 的内容 ${histNote}`;
+  details.appendChild(sum);
+
+  const body = document.createElement("div");
+  const mkLbl = t => { const l = document.createElement("div"); l.className = "lbl"; l.textContent = t; body.appendChild(l); };
+  const mkPre = s => { const p = document.createElement("pre"); p.textContent = s; body.appendChild(p); };
+
+  mkLbl("【当前提问】");
+  mkPre(text);
+
+  mkLbl("【系统提示词（基础）】");
+  mkPre(CHAT_BASE_PROMPT);
+
+  mkLbl("【随附页面上下文】" + (ctxParts.length ? `（${ctxParts.length} 项）` : "（未选择航线/当前页面无数据，故未附带）"));
+  mkPre(ctxParts.length ? ctxParts.map((p, i) => `${i + 1}) ${p}`).join("\n\n") : "（空）");
+
+  mkLbl("【实际发送的 system 完整内容】= 基础提示词 + 上面拼接的上下文：");
+  mkPre(CHAT_BASE_PROMPT + pageCtx);
+
+  const copy = document.createElement("button");
+  copy.className = "copy-btn";
+  copy.textContent = "复制以上全部内容";
+  copy.onclick = () => {
+    const all = "【提问】\n" + text
+      + "\n\n【系统提示词（基础）】\n" + CHAT_BASE_PROMPT
+      + "\n\n【随附页面上下文】\n" + (ctxParts.length ? ctxParts.map((p, i) => `${i + 1}) ${p}`).join("\n\n") : "（空）")
+      + "\n\n【实际发送的 system】\n" + CHAT_BASE_PROMPT + pageCtx;
+    const done = () => { copy.textContent = "已复制 ✓"; };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(all).then(done).catch(() => {});
+    } else {
+      copy.textContent = "复制失败";
+    }
+  };
+  body.appendChild(copy);
+
+  details.appendChild(body);
+  container.appendChild(details);
+  container.scrollTop = container.scrollHeight;
+}
+
 function showGuide() {
   document.getElementById("chat-guide").style.display = "";
 }
@@ -1438,6 +1591,9 @@ async function sendChat() {
 
   const pageCtx = ctxParts.length ? "\n【当前页面真实数据，请据此回答不要编造】\n" + ctxParts.join("\n\n") : "";
 
+  // 开关打开时，在对话中列出本次实际发送的 Prompt 与上下文
+  if (promptDebugOn) appendPromptDebug(text, ctxParts, pageCtx);
+
   const loadingDiv = addChatMsg("ai", "思考中...");
   loadingDiv.classList.add("loading");
 
@@ -1450,7 +1606,7 @@ async function sendChat() {
       },
       body: JSON.stringify({
         messages: [
-          { role: "system", content: "你是航班价格监控助手。用户在看Flight-Monitor数据看板，可以回答航班价格、趋势分析、出行建议等问题。请简洁回答。" + pageCtx },
+          { role: "system", content: CHAT_BASE_PROMPT + pageCtx },
           ...chatHistory,
         ],
       }),

@@ -1222,23 +1222,27 @@ def monitor_all_routes(debug=False):
     normal_items = []
     # MONITOR_DAYS_AHEAD=0 且有告警航线时，只爬告警航线（不爬无关航线）
     only_alert_routes = (config.MONITOR_DAYS_AHEAD == 0 and config.ALARM)
-    all_alert_dates = {d for dates in config.ALARM.values() for d in dates}
     for route in config.ROUTES:
         route_key = (route['from'], route['to'])
         if only_alert_routes and route_key not in config.ALARM:
             continue
-        # alert_only 航线：只在告警日期爬取，不爬满30天
+        # alert_only 航线：必须自身在 ALARM 中配置了该航线+日期才爬取，否则整条航线跳过
         is_alert_only = route.get('alert_only', False)
+        if is_alert_only and route_key not in config.ALARM:
+            continue  # alert_only 航线未配置告警 → 该航线完全跳过
+        route_alert_dates = config.ALARM.get(route_key, [])
         for date_str in dates:
-            if is_alert_only and date_str not in all_alert_dates:
-                continue  # alert_only 航线跳过非告警日期
+            if is_alert_only and date_str not in route_alert_dates:
+                continue  # alert_only 航线只爬自身告警的日期
             is_priority = (has_priority and
                           route_key in config.ALARM and
-                          date_str in config.ALARM.get(route_key, []))
+                          date_str in route_alert_dates)
             if is_priority:
                 priority_items.append((route, date_str))
             else:
                 normal_items.append((route, date_str))
+
+
 
     if has_priority and priority_items:
         print(f"   🔔 {len(priority_items)} 个优先项（告警航线+日期），将优先处理并立即推送")

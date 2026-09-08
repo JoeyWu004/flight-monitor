@@ -8,7 +8,7 @@ Flight-Monitor - 配置文件
 # from/to: 携程城市代码（三字码）
 # from_name/to_name: 显示用中文名称
 # 每条航线可配置:
-#   alert_only: True = 只在告警日期爬取（适合不常飞的航线，避免爬满30天）
+#   alert_only: True = 只在 ALARM 中为该航线配置的日期爬取（需同时把该航线加入 ALARM 才会爬；不配则整条航线跳过）
 #   days_ahead: 覆盖全局 MONITOR_DAYS_AHEAD（对 alert_only 航线无效）
 ROUTES = [
     {
@@ -30,13 +30,41 @@ ROUTES = [
         "from_name": "泉州",
         "to_name": "北京",
     },
+    {
+        "from": "bjs",  # 北京（包含首都PEK和大兴PKX两个机场）
+        "to": "hsn",  # 舟山
+        "from_name": "北京",
+        "to_name": "舟山",
+        "alert_only": True,     # 只在告警日期爬取，不爬满30天
+    },
+    {
+        "from": "bjs",  # 北京（包含首都PEK和大兴PKX两个机场）
+        "to": "ngb",  # 宁波
+        "from_name": "北京",
+        "to_name": "宁波",
+        "alert_only": True,  # 只在告警日期爬取，不爬满30天
+    },
+    {
+        "from": "hsn",  # 舟山
+        "to": "bjs",  # 北京
+        "from_name": "舟山",
+        "to_name": "北京",
+        "alert_only": True,  # 只在告警日期爬取，不爬满30天
+    },
+    {
+        "from": "ngb",  # 宁波
+        "to": "bjs",  # 北京
+        "from_name": "宁波",
+        "to_name": "北京",
+        "alert_only": True,  # 只在告警日期爬取，不爬满30天
+    },
 ]
 
 # 告警过滤：仅这些航线+日期有价格变动才推送飞书（空字典=不推送飞书、不调用DS）
 # 键: (出发代码, 到达代码) 元组，值: 该航线对应的告警日期列表
 # 两个条件同时生效：航线必须是键 AND 日期必须在对应列表中才会推送
 ALARM = {
-
+    ("jjn", "bjs"): ["2026-10-17"]
 }
 # 爬虫仍然会抓取所有航线+日期的数据存入数据库，只是不推送给飞书
 

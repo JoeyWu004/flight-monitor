@@ -42,3 +42,14 @@ run_monitor.bat
 # 看板 - 含敏感信息不提交
 server/users.json
 server/sync_db.bat
+
+# 调试脚本与中间产物（本地排查用，不进仓库）
+debug/
+
+# EDA 的原始分析产物：含输出快照与本机结论 md，体量大且不可复现。
+# 上传的是 eda/code/ —— 清空输出的纯代码版本。
+eda/0903/
+
+# Claude Code 本地配置（含个人路径与权限规则）。
+# 只忽略这一个文件，务必保留 .claude/skills/ —— 那是 skill 本体。
+.claude/settings.local.json

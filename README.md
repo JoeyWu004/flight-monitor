@@ -221,6 +221,57 @@ scp flight_monitor.db root@115.28.209.155:/opt/flight-monitor-server/
 
 > ⚠️ 爬虫运行中同步也安全 — SQLite 写入是原子提交，不会产生损坏文件。最坏情况少几条最新数据。
 
+## 购票决策助手（advisor/）
+
+爬虫只管**记录**价格，`advisor/` 回答**该不该买、买哪一班**。
+
+它把你的历史快照重算成「现价处在同期什么分位」，再据此给出时机判断与选班建议，
+并显式报出数据新鲜度、样本量、置信度与已知偏差 —— **不依赖任何 LLM，结论可复现**。
+
+```bash
+cd <仓库根>                     # 含 flight_monitor.db 的目录
+
+python advisor/cli.py --list-routes                    # 有哪些航线、数据够不够
+python advisor/cli.py --route "bjs->jjn" --date 2026-10-17
+```
+
+输出长这样（单日决策卡片）：
+
+```
+结论：可以下手
+数据：截止 2026-09-16 20:17（1.4 小时前 · 新鲜）
+依据：现价 ¥420 = 同期 17% 分位（≤25%·偏便宜）；参照 n=124 / 51 个起飞日，置信度 high
+选班：河北航空 NS8011 · 大兴 07:55 → 10:45 · ¥420
+```
+
+常用参数：
+
+| 参数 | 用途 |
+|---|---|
+| `--scan 21` | 扫未来 21 天，逐日给建议；`--scan-from DATE` 可指定起算日 |
+| `--arrive-by 16:00` | 只要该时刻前落地的航班（**会同时收窄历史参照集**） |
+| `--max-price 520` | 预算口径，报「同期有多少比例的最低價落在预算内」 |
+| `--flight NS8011` | 单航班完整价格轨迹 —— 判断它是固定档位还是会波动 |
+| `--as-of "2026-09-03 11:29:22"` | 回放到某一批爬取，复盘用 |
+| `--json` / `--format table` | 结构化输出 / 批量表格 |
+| `--selftest` | 口径自检（改过代码后建议跑） |
+
+**解释器**：任何装了 `pandas`/`numpy` 的 Python 都行，通常就是爬虫用的那个环境。
+选错时它会给出可照做的提示。详见 [`advisor/README.md`](advisor/README.md)。
+
+> 🤖 **Claude Code 用户（可选）**：把决策手册装成 skill，就能用自然语言问
+> 「泉州到北京 10 月 17 号该不该买」，它会自己调上面的命令：
+>
+> ```bash
+> mkdir -p .claude/skills/flight-advisor
+> cp advisor/SKILL.md .claude/skills/flight-advisor/SKILL.md
+> ```
+>
+> 装了之后输入 `/flight-advisor` 即可。不装也完全不影响 —— `advisor/cli.py` 是独立的。
+
+> 🔍 **口径与陷阱**：分位怎么算、有哪些已知偏差（幸存者偏差、参照集敏感、平台价、
+> 全价舱跳变……），见 [`advisor/reference/data-semantics.md`](advisor/reference/data-semantics.md)。
+
 ## Windows 开机自启动
 
 右键 `startup_setup.bat` → **以管理员身份运行**，自动创建「登录时触发」的计划任务。
@@ -268,6 +319,14 @@ Flight-Monitor/
 │   ├── users.json       # 登录用户
 │   └── static/
 │       └── index.html   # 看板前端页面
+├── advisor/             # 购票决策助手（只读 DB，不碰爬虫）
+│   ├── cli.py           # 命令行入口
+│   ├── core.py          # 分析引擎（分位/等待胜率/删失/选班）
+│   ├── common.py        # 取数与特征工程
+│   ├── SKILL.md         # Claude Code skill 手册
+│   └── reference/       # 数据口径与策略文档
+├── eda/
+│   └── code/            # 探索性分析 notebook（已清空输出）
 ├── chrome_user_data/    # Chrome 持久化身份（--setup 生成）
 ├── flight_monitor.db    # SQLite 数据库
 └── monitor.log          # 运行日志

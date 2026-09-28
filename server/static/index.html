@@ -690,7 +690,10 @@ async function onDestChange() {
     common.forEach(d => {
       const opt = document.createElement("option");
       opt.value = d;
-      const dow = new Date(d + 'T00:00:00').getDay();
+      // 手动拆年月日：历史数据里存过 "2026-11-1" 这种不补零的日期，
+      // new Date('2026-11-1T00:00:00') 会得到 Invalid Date，星期就成了 undefined
+      const [yy, mm, dd] = d.split('-').map(Number);
+      const dow = new Date(yy, mm - 1, dd).getDay();
       opt.textContent = d + ' ' + weekMap[dow];
       dateSel.appendChild(opt);
     });

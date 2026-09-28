@@ -64,9 +64,36 @@ ROUTES = [
 # 键: (出发代码, 到达代码) 元组，值: 该航线对应的告警日期列表
 # 两个条件同时生效：航线必须是键 AND 日期必须在对应列表中才会推送
 ALARM = {
-    ("jjn", "bjs"): ["2026-10-17"]
+    ("jjn", "bjs"): ["2026-11-1", "2026-11-2"]
 }
 # 爬虫仍然会抓取所有航线+日期的数据存入数据库，只是不推送给飞书
+
+# 日期统一校验 + 补零成 YYYY-MM-DD：
+#   "2026-11-1" 不补零的写法会原样存进数据库，导致前端 ISO 解析失败（星期显示 undefined）、
+#   字符串排序错乱；"2026-9-31" / "2027-2-29" 这类不存在的日期会带着错日期去爬携程。
+#   所以这里统一拦住，写错就直接启动失败并指出是哪一条。
+from datetime import datetime as _dt
+
+
+def _normalize_alert_dates(alarm):
+    bad = []
+    normalized = {}
+    for key, dates in alarm.items():
+        normalized[key] = []
+        for d in dates:
+            try:
+                normalized[key].append(_dt.strptime(d.strip(), "%Y-%m-%d").strftime("%Y-%m-%d"))
+            except (ValueError, AttributeError, TypeError):
+                bad.append(f"  ALARM[{key}] 里的 {d!r}")
+    if bad:
+        raise ValueError(
+            "config.py 的 ALARM 日期配置有误，应为 YYYY-MM-DD 且必须是真实存在的日期"
+            "（如 2026-11-01）：\n" + "\n".join(bad)
+        )
+    return normalized
+
+
+ALARM = _normalize_alert_dates(ALARM)
 
 # 直飞航班过滤（True=仅直飞，排除通程/中转航班）
 DIRECT_FLIGHTS_ONLY = True

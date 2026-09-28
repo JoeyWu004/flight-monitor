@@ -1666,9 +1666,10 @@ if __name__ == "__main__":
 
     # 计算日期信息（常规日期 + 告警日期，去重排序）
     monitor_dates = get_monitor_dates()
-    # 告警日期始终纳入监控范围（即使 MONITOR_DAYS_AHEAD=0）
+    # 告警日期始终纳入监控范围（即使 MONITOR_DAYS_AHEAD=0）；过去的日期同样过滤掉
+    _today_str = datetime.now().strftime('%Y-%m-%d')
     for d in {d for dates in config.ALARM.values() for d in dates}:
-        if d not in monitor_dates:
+        if d >= _today_str and d not in monitor_dates:
             monitor_dates.append(d)
     monitor_dates.sort()
     total_requests = len(config.ROUTES) * len(monitor_dates)

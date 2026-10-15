@@ -1,4 +1,5 @@
 beautifulsoup4>=4.9.0
 DrissionPage>=4.0.0
 requests>=2.25.0
+psutil>=5.9.0
 win11toast>=0.7.0

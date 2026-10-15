@@ -50,6 +50,17 @@ debug/
 # 上传的是 eda/code/ —— 清空输出的纯代码版本。
 eda/0903/
 
+# 各 AI 工具的 skill 注册副本（.claude/skills/、.dsh/skills/）。
+# skill 本体是 advisor/SKILL.md（已跟踪），这两处只是拷进工具目录给工具读的副本，
+# md5 与本体完全一致；提交会变成多份重复且容易改歪，一律不预置，
+# 别人按 advisor/README.md 自行安装。
+# （.claude/skills/ 另在 .git/info/exclude 里也忽略了一份，属本机设置）
+.dsh/
+
 # Claude Code 本地配置（含个人路径与权限规则）。
-# 只忽略这一个文件，务必保留 .claude/skills/ —— 那是 skill 本体。
 .claude/settings.local.json
+
+# 看板前端第三方库 server/static/vendor/ —— 必须提交，不要忽略！
+# 这里原本走 jsdelivr CDN，国内 ERR_CONNECTION_RESET 会让 echarts 加载不到、
+# 折线图整块空白，已改为本地自托管。以后若想加 *.min.js 一类的忽略规则，
+# 务必放行 server/static/vendor/。

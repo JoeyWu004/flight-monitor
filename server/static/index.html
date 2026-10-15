@@ -5,8 +5,12 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Flight-Monitor 数据看板</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='80' font-size='80'>🛫</text></svg>">
-<script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
-	<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<!-- 本地自托管：jsdelivr 在国内会 ERR_CONNECTION_RESET，导致 echarts 未加载、整个趋势图空白。
+     升级：去 npmmirror 下对应版本，存成带版本号的文件名，再改下面两行（改完刷新页面即可，不用重启服务）。
+     echarts 5.5.0  https://registry.npmmirror.com/echarts/5.5.0/files/dist/echarts.min.js
+     marked 18.1.1  https://registry.npmmirror.com/marked/18.1.1/files/lib/marked.umd.js -->
+<script src="/static/vendor/echarts-5.5.0.min.js"></script>
+	<script src="/static/vendor/marked-18.1.1.min.js"></script>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 

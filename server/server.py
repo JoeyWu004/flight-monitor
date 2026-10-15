@@ -40,6 +40,10 @@ app = FastAPI(title="Flight-Monitor Dashboard")
 # 静态文件目录
 STATIC_DIR = Path(__file__).parent / "static"
 
+# 本地自托管的第三方库（echarts / marked）。
+# 原来走 jsdelivr CDN，国内会 ERR_CONNECTION_RESET，echarts 加载不到就整个趋势图空白。
+app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
 
 # ============================================================
 #  工具函数

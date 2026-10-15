@@ -12,9 +12,11 @@ from bs4 import BeautifulSoup
 from DrissionPage import WebPage, ChromiumOptions
 from time import sleep
 import requests
+import psutil
 import json
 import re
 import io
+import socket
 import sys
 import os
 import random
@@ -71,20 +73,63 @@ def setup_logging():
 #  工具函数
 # ============================================================
 
+# 通知用的应用标识。不要用 win11toast 的默认值 "Python"：
+# 那个 id 是所有 python 脚本共用的，在系统通知设置里被关掉
+# （HKCU\...\Notifications\Settings\Python 的 Enabled=0）就发不出来了，
+# 报 WPN_E_NOTIFICATION_DISABLED 0x803E0111。
+# 麻烦的是通知平台会**按会话缓存**各 app_id 的开关：已经用过的 id 即使把
+# Enabled 改回 1 也不会立刻生效（实测重启 WpnUserService 也没用），
+# 换成没用过的专属 id 才能立即绕开这份陈旧缓存。
+TOAST_APP_ID = "Flight-Monitor"
+
+# 子进程里执行的通知代码：发通知 → 接住投递失败 → 失败写进日志。
+# win11toast 的 show() 不抛异常，真正的失败只走 on_failed 回调
+# （实测约 0.03 秒后触发），所以必须自己接住，否则失败完全静默。
+_TOAST_CHILD_CODE = """
+import time
+from win11toast import toast
+
+_fail = []
+def _on_failed(e):
+    _fail.append(repr(e))
+
+toast({title}, {message}, app_id={app_id}, on_failed=_on_failed)
+time.sleep(1)   # 等投递结果回调（失败事件实测 0.03s 就回来了）
+if _fail and {log_file!r}:
+    try:
+        with open({log_file!r}, 'a', encoding='utf-8') as f:
+            f.write('[通知] 发送失败: ' + '; '.join(_fail) + '\\n')
+    except Exception:
+        pass
+
+"""
+
+
 def show_windows_toast(title, message, is_error=False):
-    """Windows 原生 Toast 通知（通过 win11toast），子进程发送不阻塞主程序"""
+    """Windows 原生 Toast 通知（通过 win11toast），子进程发送不阻塞主程序
+
+    子进程依然是「发完就走」，不阻塞监控主流程；区别是把投递失败写进了
+    monitor.log —— 之前 stdout/stderr 全丢进 DEVNULL，通知发不出去时
+    日志里一点痕迹都没有（曾静默失效 5 天才被发现）。
+    """
     try:
         import subprocess
         import json
+        log_file = os.path.abspath(config.LOG_FILE) if config.LOG_FILE else ""
+        code = _TOAST_CHILD_CODE.format(
+            title=json.dumps(title),
+            message=json.dumps(message),
+            app_id=json.dumps(TOAST_APP_ID),
+            log_file=log_file,
+        )
         # 启动独立子进程发送通知，主进程不等待
         subprocess.Popen(
-            [sys.executable, '-c',
-             f'from win11toast import toast; toast({json.dumps(title)}, {json.dumps(message)})'],
+            [sys.executable, '-c', code],
             creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0,
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         )
-    except Exception:
-        pass  # 任何异常都不影响监控主流程
+    except Exception as e:
+        print(f"   ⚠️ 通知发送失败: {e}")
 
 
 def _set_sleep_state(prevent):
@@ -848,6 +893,49 @@ def is_widebody(aircraft_type):
 #  携程页面抓取
 # ============================================================
 
+def _find_free_port():
+    """让系统分配一个当前空闲的端口，供浏览器调试端口使用"""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(('127.0.0.1', 0))
+        return s.getsockname()[1]
+
+
+def _kill_zombie_browsers():
+    """清理仍占用本项目 user-data-dir 的残留浏览器进程，返回清理数量。
+
+    浏览器卡死后 quit() 未必杀得干净（事件线程先死，page 对象作废，
+    之后连 quit 都发不出去）。残留进程会一直占着 user-data-dir 的
+    SingletonLock 和调试端口，导致后面重建的新实例起不来或被判定为
+    连不上——日志里就是「重建浏览器失败: 浏览器连接失败，请检查9222端口」。
+
+    按 user-data-dir 反查而不是按端口，这样换了随机端口后依然找得到。
+    """
+    if not config.CHROME_USER_DATA_PATH:
+        return 0
+    profile = os.path.abspath(config.CHROME_USER_DATA_PATH).lower()
+    killed = 0
+    for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
+        try:
+            name = (proc.info['name'] or '').lower()
+            if name not in ('msedge.exe', 'chrome.exe'):
+                continue
+            cmdline = ' '.join(proc.info['cmdline'] or []).lower()
+            if profile not in cmdline:
+                continue
+            # 连子进程一起收掉（渲染/GPU/网络等进程不带 user-data-dir，只杀主进程会留下孤儿）
+            for child in proc.children(recursive=True):
+                try:
+                    child.kill()
+                    killed += 1
+                except psutil.Error:
+                    pass
+            proc.kill()
+            killed += 1
+        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+            continue
+    return killed
+
+
 def create_page(headless=True):
     """创建浏览器页面实例，带反检测配置
 
@@ -895,6 +983,11 @@ def create_page(headless=True):
         co.set_user_data_path(user_dir)
         # 注意：不要调用 co.auto_port()。它会重新分配一个临时 autoPortData 目录，
         # 覆盖掉上面的 user-data-dir，导致 Cookie/登录态/指纹无法持久化（每轮都是全新匿名身份）。
+
+    # 调试端口用随机空闲端口，不用 DrissionPage 默认的 9222：
+    # 浏览器卡死后残留的僵尸进程会占着 9222，新实例连不上就报「请检查9222端口」。
+    # 注意这跟上面的 auto_port() 是两码事——它只换端口，不动 user-data-dir。
+    co.set_local_port(_find_free_port())
 
     if headless:
         co.headless()
@@ -1287,6 +1380,12 @@ def monitor_all_routes(debug=False):
                             shared_page.quit()
                         except Exception:
                             pass
+                    # 卡死的浏览器往往杀不干净，残留进程占着 user-data-dir 和调试端口，
+                    # 不清理的话下面的 create_page() 必定失败
+                    n_killed = _kill_zombie_browsers()
+                    if n_killed:
+                        print(f"      🧹 已清理 {n_killed} 个残留浏览器进程")
+                        sleep(3)  # 等操作系统释放 user-data-dir 的锁
                     try:
                         shared_page = create_page(config.HEADLESS)
                         print(f"      🔧 已重建浏览器实例")
